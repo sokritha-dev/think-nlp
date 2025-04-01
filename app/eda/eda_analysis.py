@@ -14,8 +14,21 @@ class EDA:
     def __init__(self, filepath):
         """Initialize EDA with the dataset"""
         self.df = pd.read_csv(filepath)
-        self.text_column = "review_text"  # Change this if using a different text column
-        self.sentiment_column = "sentiment"
+        self.text_column = "review"
+        self.rating_column = "rating"  # Ratings 1-5
+
+        # Assign sentiment based on rating
+        self.df["sentiment"] = self.df[self.rating_column].apply(self.assign_sentiment)
+
+    @staticmethod
+    def assign_sentiment(rating):
+        """Convert numerical rating into categorical sentiment."""
+        if rating >= 4:
+            return "Positive"
+        elif rating == 3:
+            return "Neutral"
+        else:
+            return "Negative"
 
     def check_data_quality(self):
         """Check missing values and duplicate rows"""
@@ -25,9 +38,9 @@ class EDA:
     def plot_sentiment_distribution(self):
         """Plot distribution of sentiment labels"""
         plt.figure(figsize=(6, 4))
-        sns.countplot(x=self.df[self.sentiment_column])
+        sns.countplot(x=self.df["sentiment"])
         plt.title("Sentiment Distribution")
-        plt.savefig("../reports/sentiment_distribution.png")
+        plt.savefig("app/reports/sentiment_distribution.png")
         plt.show()
 
     def plot_text_length_distribution(self):
@@ -38,7 +51,7 @@ class EDA:
         plt.figure(figsize=(8, 5))
         sns.histplot(self.df["text_length"], bins=30, kde=True)
         plt.title("Distribution of Review Text Lengths")
-        plt.savefig("../reports/text_length_distribution.png")
+        plt.savefig("app/reports/text_length_distribution.png")
         plt.show()
 
     def generate_word_cloud(self):
@@ -52,40 +65,40 @@ class EDA:
         plt.imshow(wordcloud, interpolation="bilinear")
         plt.axis("off")
         plt.title("Word Cloud of Reviews")
-        plt.savefig("../reports/word_cloud.png")
+        plt.savefig("app/reports/word_cloud.png")
         plt.show()
 
     def get_common_words(self, sentiment, num_words=10):
         """Find the most common words for a given sentiment"""
         text = " ".join(
-            self.df[self.df[self.sentiment_column] == sentiment][
-                self.text_column
-            ].astype(str)
+            self.df[self.df["sentiment"] == sentiment][self.text_column].astype(str)
         )
         words = text.split()
         return Counter(words).most_common(num_words)
 
     def plot_most_common_words(self, num_words=20):
-        """Plot the most common words in the dataset"""
-        text = " ".join(review for review in self.df[self.text_column].astype(str))
-        words = text.lower().split()
+        """Optimized: Plot the most common words in the dataset"""
+        stop_words = set(stopwords.words("english"))  # Faster lookup with set()
 
-        # Remove stopwords and punctuation
-        words = [
-            word
-            for word in words
-            if word not in stopwords.words("english") and word not in string.punctuation
-        ]
+        # Extract words efficiently
+        words = (
+            self.df[self.text_column]
+            .astype(str)
+            .str.lower()
+            .str.split()
+            .explode()  # Turns lists into rows for faster processing
+        )
+
+        # Remove stopwords and punctuation efficiently
+        words = words[~words.isin(stop_words) & words.str.isalpha()]  # Fast filtering
 
         # Count most common words
-        word_counts = Counter(words).most_common(num_words)
+        word_counts = words.value_counts().head(num_words)
 
         # Plot
         plt.figure(figsize=(8, 5))
-        sns.barplot(
-            x=[word[0] for word in word_counts], y=[word[1] for word in word_counts]
-        )
+        sns.barplot(x=word_counts.index, y=word_counts.values)
         plt.xticks(rotation=45)
         plt.title("Top 20 Most Common Words")
-        plt.savefig("../reports/word_frequency.png")
+        plt.savefig("app/reports/word_frequency.png")
         plt.show()

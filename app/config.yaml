@@ -1,0 +1,19 @@
+# Configuration file for NLP pipeline
+
+steps:
+  actions:
+    - type: data_cleaning
+      is_execute: false
+      file_input: "app/data/tripadvisor.csv"
+      file_output: "app/data/tripadvisor_cleaned.csv"
+
+    - type: eda
+      is_execute: false
+      file_input: "app/data/tripadvisor_cleaned.csv"
+
+    - type: feature_extraction
+      is_execute: true
+      method: "tfidf"  # Options: "tfidf", "word2vec", "glove", "bert"
+      file_input: "app/data/tripadvisor_cleaned.csv"
+      feature_output: "app/data/features.pkl"
+      vector_output: "app/data/tfidf_vectorizer.pkl"
