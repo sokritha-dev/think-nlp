@@ -30,12 +30,11 @@ for action in config["steps"]["actions"]:
         },
         "train_model": {
             "logistic_regression": f"python -m app.models.logistic_regression {file_input} {action.get('feature_input', '')} {action.get('model_output', '')}",
-            "svm": f"python -m app.train_model {file_output} {action.get('feature_input', '')} {action.get('model_output', '')}",
-            "random_forest": f"python -m app.train_model {file_output} {action.get('feature_input', '')} {action.get('model_output', '')}",
         },
         "predict_sentiment": {
             "logistic_regression": f'python -m app.models.predictions.predict_logistic_regression "{action.get("file_input", "")}" {action.get("model_input", "")} {action.get("vector_input", "")} {action.get("file_output", "")}',
         },
+        "topic_modeling": f"python -m app.topic_modelings.lda_topic_modeling {file_input} {file_output} {action.get('num_topics', 5)}",
     }
 
     if is_execute:

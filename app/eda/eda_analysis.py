@@ -5,7 +5,6 @@ from wordcloud import WordCloud
 from collections import Counter
 import nltk
 from nltk.corpus import stopwords
-import string
 
 nltk.download("stopwords")
 

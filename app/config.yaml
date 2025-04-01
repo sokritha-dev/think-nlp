@@ -3,23 +3,23 @@
 steps:
   actions:
     - type: data_cleaning
-      is_execute: false
+      is_execute: true
       file_input: "app/data/tripadvisor.csv"
       file_output: "app/data/tripadvisor_cleaned.csv"
 
     - type: eda
-      is_execute: false
+      is_execute: true
       file_input: "app/data/tripadvisor_cleaned.csv"
 
     - type: feature_extraction
-      is_execute: false
+      is_execute: true
       method: "tfidf"  # Options: "tfidf", "word2vec", "glove", "bert"
       file_input: "app/data/tripadvisor_cleaned.csv"
       feature_output: "app/data/tfidf_features.pkl"
       vector_output: "app/data/tfidf_vectorizer.pkl"
 
     - type: train_model
-      is_execute: false
+      is_execute: true
       method: "logistic_regression"
       file_input: "app/data/tripadvisor_cleaned.csv"
       feature_input: "app/data/tfidf_features.pkl"
@@ -32,3 +32,9 @@ steps:
       model_input: "app/models/tfidf_logistic_regression_sentiment_model.pkl"
       vector_input: "app/data/tfidf_vectorizer.pkl"
       file_output: "app/data/predictions/logistic_regression.csv"
+
+    - type: topic_modeling
+      is_execute: true
+      file_input: "app/data/tripadvisor_cleaned.csv"
+      file_output: "app/data/topics/lda_topics.csv"
+      num_topics: 5

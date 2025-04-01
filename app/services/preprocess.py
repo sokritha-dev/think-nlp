@@ -9,7 +9,28 @@ nltk.download("stopwords")
 nltk.download("wordnet")
 
 # Load stopwords as a **set** (faster lookup)
-stop_words = set(stopwords.words("english"))
+# Default + custom stopwords
+custom_stopwords = [
+    "nt",
+    "got",
+    "like",
+    "just",
+    "thing",
+    "told",
+    "said",
+    "asked",
+    "really",
+    "went",
+    "come",
+    "back",
+    "make",
+    "one",
+    "would",
+    "could",
+    "also",
+    "hotel",
+]
+stop_words = set(stopwords.words("english")).union(set(custom_stopwords))
 
 # Initialize lemmatizer once (instead of per function call)
 lemmatizer = WordNetLemmatizer()
