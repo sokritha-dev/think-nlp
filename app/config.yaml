@@ -12,8 +12,23 @@ steps:
       file_input: "app/data/tripadvisor_cleaned.csv"
 
     - type: feature_extraction
-      is_execute: true
+      is_execute: false
       method: "tfidf"  # Options: "tfidf", "word2vec", "glove", "bert"
       file_input: "app/data/tripadvisor_cleaned.csv"
-      feature_output: "app/data/features.pkl"
+      feature_output: "app/data/tfidf_features.pkl"
       vector_output: "app/data/tfidf_vectorizer.pkl"
+
+    - type: train_model
+      is_execute: false
+      method: "logistic_regression"
+      file_input: "app/data/tripadvisor_cleaned.csv"
+      feature_input: "app/data/tfidf_features.pkl"
+      model_output: "app/models/tfidf_logistic_regression_sentiment_model.pkl"
+
+    - type: predict_sentiment
+      is_execute: true
+      method: "logistic_regression"  # Options: "logistic_regression", "svm", "random_forest"
+      file_input: "app/data/test_reviews.csv"
+      model_input: "app/models/tfidf_logistic_regression_sentiment_model.pkl"
+      vector_input: "app/data/tfidf_vectorizer.pkl"
+      file_output: "app/data/predictions/logistic_regression.csv"

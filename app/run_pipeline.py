@@ -28,20 +28,36 @@ for action in config["steps"]["actions"]:
             "glove": f"python -m app.feature_extraction.glove_vectorizer -- {file_input} {action.get('feature_output', '')} {action.get('vector_output', '')}",
             "bert": f"python -m app.feature_extraction.bert_vectorizer -- {file_input} {action.get('feature_output', '')} {action.get('vector_output', '')}",
         },
-        "train_model": "python -m app.models.train_model",
-        "evaluate_model": "python -m app.models.evaluate_model",
+        "train_model": {
+            "logistic_regression": f"python -m app.models.logistic_regression {file_input} {action.get('feature_input', '')} {action.get('model_output', '')}",
+            "svm": f"python -m app.train_model {file_output} {action.get('feature_input', '')} {action.get('model_output', '')}",
+            "random_forest": f"python -m app.train_model {file_output} {action.get('feature_input', '')} {action.get('model_output', '')}",
+        },
+        "predict_sentiment": {
+            "logistic_regression": f'python -m app.models.predictions.predict_logistic_regression "{action.get("file_input", "")}" {action.get("model_input", "")} {action.get("vector_input", "")} {action.get("file_output", "")}',
+        },
     }
 
     if is_execute:
         if step_type == "feature_extraction":
             feature_method = action.get("method", "tfidf")  # Default to TF-IDF
             command = step_commands["feature_extraction"].get(feature_method, "")
+        elif step_type == "train_model":
+            model_method = action.get(
+                "method", "logistic_regression"
+            )  # Default to Logistic Regression
+            command = step_commands["train_model"].get(model_method, "")
+        elif step_type == "predict_sentiment":
+            predict_method = action.get(
+                "method", "logistic_regression"
+            )  # Default to Logistic Regression
+            command = step_commands["predict_sentiment"].get(predict_method, "")
         else:
             command = step_commands.get(step_type, "")
 
         if command:
             logging.info(
-                f"Running step: {step_type} ({feature_method if step_type == 'feature_extraction' else ''})..."
+                f"Running step: {step_type} ({feature_method if step_type == 'feature_extraction' else predict_method if step_type == 'predict_sentiment' else ''})..."
             )
             start_time = time.time()
             result = subprocess.run(command, shell=True)
