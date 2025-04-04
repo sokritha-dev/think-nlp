@@ -5,6 +5,8 @@ from wordcloud import WordCloud
 from collections import Counter
 import nltk
 from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import CountVectorizer
+
 
 nltk.download("stopwords")
 
@@ -14,20 +16,6 @@ class EDA:
         """Initialize EDA with the dataset"""
         self.df = pd.read_csv(filepath)
         self.text_column = "review"
-        self.rating_column = "rating"  # Ratings 1-5
-
-        # Assign sentiment based on rating
-        self.df["sentiment"] = self.df[self.rating_column].apply(self.assign_sentiment)
-
-    @staticmethod
-    def assign_sentiment(rating):
-        """Convert numerical rating into categorical sentiment."""
-        if rating >= 4:
-            return "Positive"
-        elif rating == 3:
-            return "Neutral"
-        else:
-            return "Negative"
 
     def check_data_quality(self):
         """Check missing values and duplicate rows"""
@@ -100,4 +88,27 @@ class EDA:
         plt.xticks(rotation=45)
         plt.title("Top 20 Most Common Words")
         plt.savefig("app/reports/word_frequency.png")
+        plt.show()
+
+    def plot_top_ngrams(self, ngram_range=(2, 2), num_ngrams=20):
+        """Plot the most common n-grams in the dataset"""
+        vectorizer = CountVectorizer(
+            stop_words="english",
+            ngram_range=ngram_range,
+        )
+        text_data = self.df[self.text_column].astype(str).values
+        X = vectorizer.fit_transform(text_data)
+        ngram_freq = X.sum(axis=0).A1  # Flatten sparse matrix
+        vocab = vectorizer.get_feature_names_out()
+        ngram_freq = pd.Series(ngram_freq, index=vocab).sort_values(ascending=False)
+
+        top_ngrams = ngram_freq.head(num_ngrams)
+
+        # Plot
+        plt.figure(figsize=(10, 5))
+        sns.barplot(x=top_ngrams.values, y=top_ngrams.index)
+        plt.title(f"Top {num_ngrams} {'-'.join(map(str, ngram_range))}-grams")
+        plt.xlabel("Frequency")
+        plt.tight_layout()
+        plt.savefig(f"app/reports/{ngram_range}ngram_top_words.png")
         plt.show()

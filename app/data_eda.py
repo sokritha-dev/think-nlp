@@ -28,4 +28,10 @@ print("\n📌 Most Common Words in Negative Reviews:", eda.get_common_words("Neg
 print("\n📈 Plotting Most Common Words...")
 eda.plot_most_common_words()
 
+print("\n📈 Plotting Most bigram Common Words...")
+eda.plot_top_ngrams(ngram_range=(2, 2), num_ngrams=20)
+
+print("\n📈 Plotting Most trigram Common Words...")
+eda.plot_top_ngrams(ngram_range=(3, 3), num_ngrams=20)
+
 print(f"✅ EDA completed successfully using dataset: {args.file_input}")

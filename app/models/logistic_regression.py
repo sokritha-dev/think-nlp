@@ -17,9 +17,6 @@ class LogisticRegressionTrainer:
     def __init__(self, file_input, feature_input):
         """Initialize model training with dataset and features."""
         self.df = pd.read_csv(file_input)
-
-        # Convert rating to sentiment labels
-        self.df["sentiment"] = self.df["rating"].apply(self.assign_sentiment)
         self.labels = self.df["sentiment"]
 
         # Load TF-IDF features
@@ -30,16 +27,6 @@ class LogisticRegressionTrainer:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
             self.X, self.labels, test_size=0.2, random_state=42
         )
-
-    @staticmethod
-    def assign_sentiment(rating):
-        """Convert numerical rating into categorical sentiment."""
-        if rating >= 4:
-            return "Positive"
-        elif rating == 3:
-            return "Neutral"
-        else:
-            return "Negative"
 
     def train_model(self):
         """Train Logistic Regression model."""

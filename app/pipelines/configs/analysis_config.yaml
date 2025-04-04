@@ -1,0 +1,22 @@
+# Configuration file for NLP pipeline
+
+steps:
+  actions:
+    - type: data_cleaning
+      is_execute: false
+      file_input: "app/data/raw/tripadvisor.csv"
+      file_output: "app/data/cleaned/tripadvisor_sentence_cleaned.csv"
+      split_mode: "sentence"
+
+    - type: topic_modeling
+      is_execute: true
+      file_input: "app/data/cleaned/tripadvisor_sentence_cleaned.csv"
+      file_output: "app/data/topics/lda_topics.csv"
+      num_topics: 5
+
+    - type: analyze_sentiment_topic_modeling
+      is_execute: true
+      file_input: "app/data/topics/lda_topics.csv"
+      file_output: "app/data/topics/topic_sentiment_distribution.csv"
+      vectorizer_input: "app/data/features/tfidf_vectorizer.pkl"
+      model_input: "app/data/train_models/tfidf_logistic_regression_sentiment_model.pkl"

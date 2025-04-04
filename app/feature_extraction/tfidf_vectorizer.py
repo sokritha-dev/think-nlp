@@ -12,16 +12,19 @@ parser.add_argument(
 parser.add_argument(
     "vector_output", type=str, help="Path to save extracted TF-IDF features"
 )
+parser.add_argument("ngram_min", type=str, help="Minimum n-gram size")
+parser.add_argument("ngram_max", type=str, help="Maximum n-gram size")
+
 args = parser.parse_args()
 
 
 class TFIDFExtractor:
-    def __init__(self, filepath, max_features=5000):
+    def __init__(self, filepath, max_features=5000, ngram_range=(1, 1)):
         """Initialize TF-IDF extractor"""
         self.df = pd.read_csv(filepath)
         self.text_column = "review"  # Ensure correct column
         self.vectorizer = TfidfVectorizer(
-            max_features=max_features, stop_words="english"
+            max_features=max_features, stop_words="english", ngram_range=ngram_range
         )
         self.features = None
 
@@ -46,7 +49,8 @@ class TFIDFExtractor:
 
 
 if __name__ == "__main__":
-    extractor = TFIDFExtractor(args.file_input)
+    ngram_range = (int(args.ngram_min), int(args.ngram_max))
+    extractor = TFIDFExtractor(args.file_input, ngram_range=ngram_range)
     features = extractor.transform_text()
     extractor.save_vectorizer(filename=args.vector_output)
     print(

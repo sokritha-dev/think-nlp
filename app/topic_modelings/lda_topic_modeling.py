@@ -1,7 +1,11 @@
 import argparse
 import pandas as pd
 from gensim import corpora, models
+from gensim.models import Phrases
+from gensim.models.phrases import Phraser
 import os
+import pyLDAvis
+import pyLDAvis.gensim_models
 
 # Parse arguments
 parser = argparse.ArgumentParser()
@@ -19,13 +23,24 @@ df = pd.read_csv(args.file_input)
 if "review" not in df.columns:
     raise ValueError("Input file must contain a 'review' column")
 
+# Optional: keep rating for downstream sentiment analysis
+if "rating" not in df.columns:
+    df["rating"] = None  # Fallback if rating is missing
 
-# Light preprocessing: tokenization only
+
+# Tokenization for LDA
 def preprocess_text(text):
-    return str(text).split()
+    return str(text).lower().split()
 
 
 df["tokens"] = df["review"].astype(str).apply(preprocess_text)
+
+# Create bigrams and trigrams
+bigram = Phrases(df["tokens"], min_count=2, threshold=5)
+bigram_mod = Phraser(bigram)
+trigram = Phrases(bigram_mod[df["tokens"]], threshold=5)
+trigram_mod = Phraser(trigram)
+df["tokens"] = df["tokens"].apply(lambda x: trigram_mod[bigram_mod[x]])
 
 # Create dictionary and corpus
 id2word = corpora.Dictionary(df["tokens"])
@@ -38,6 +53,7 @@ lda_model = models.LdaModel(
     num_topics=args.num_topics,
     random_state=42,
     passes=10,
+    iterations=100,
     per_word_topics=True,
 )
 
@@ -59,12 +75,20 @@ for bow in corpus:
 
 df["dominant_topic"] = dominant_topics
 
-# Save topics and keywords
-topics_df = pd.DataFrame(topic_keywords)
+# Save outputs
 output_folder = os.path.dirname(args.file_output)
 os.makedirs(output_folder, exist_ok=True)
 
+# ✅ Save topic keywords
+topics_df = pd.DataFrame(topic_keywords)
 topics_df.to_csv(args.file_output.replace(".csv", "_topics.csv"), index=False)
+
+# ✅ Save only review and dominant_topic
 df[["review", "dominant_topic"]].to_csv(args.file_output, index=False)
+
+
+# ✅ Save LDA visualization
+# vis_data = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+# pyLDAvis.save_html(vis_data, os.path.join(output_folder, "lda_visualization.html"))
 
 print(f"✅ LDA topic modeling completed. Results saved to {args.file_output}")
