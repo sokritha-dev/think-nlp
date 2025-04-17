@@ -2,6 +2,7 @@ import yaml
 import logging
 import subprocess
 import time
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +21,7 @@ for action in config["steps"]["actions"]:
     file_output = action.get("file_output", "")
 
     step_commands = {
-        "data_cleaning": f"python -m app.data_cleaning {file_input} {file_output} {action.get('split_mode', '')}",
+        "data_cleaning": f'python -m app.data_cleaning "{file_input}" "{file_output}" "{action.get("split_mode", "")}" {json.dumps(json.dumps(action.get("custom_stopwords", [])))}',
         "eda": f"python -m app.data_eda {file_input}",
         "sentence_sentiment_analysis": {
             "vader": f"python -m app.analysis.vader_sentiment_analysis {file_input} {file_output}"

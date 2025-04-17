@@ -58,7 +58,7 @@ class EDA:
     def get_common_words(self, sentiment, num_words=10):
         """Find the most common words for a given sentiment"""
         text = " ".join(
-            self.df[self.df["sentiment"] == sentiment][self.text_column].astype(str)
+            self.df[self.df["review"] == sentiment][self.text_column].astype(str)
         )
         words = text.split()
         return Counter(words).most_common(num_words)

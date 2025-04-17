@@ -1,12 +1,33 @@
 from fastapi import FastAPI
-# from app.routes import reviews
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Hotel Review Analysis API")
+from app.api import clean, upload
+import logging
 
-# Include API routes
-# app.include_router(reviews.router)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
 
 
-@app.get("/")
-def home():
-    return {"message": "Welcome to the Hotel Review Analysis API"}
+app = FastAPI(
+    title="NLP Pipeline API",
+    description="Step-by-step NLP API for topic modeling and sentiment analysis",
+    version="1.0.0",
+)
+
+# Allow CORS (for frontend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routes
+app.include_router(upload.router)
+app.include_router(clean.router)
+# app.include_router(eda.router, prefix="/api/eda")
+# app.include_router(topic_model.router, prefix="/api/topic-model")
+# app.include_router(topic_label.router, prefix="/api/topic-label")
+# app.include_router(sentence_analysis.router, prefix="/api/sentence-analysis")

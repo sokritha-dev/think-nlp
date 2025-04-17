@@ -88,7 +88,7 @@ df[["review", "dominant_topic"]].to_csv(args.file_output, index=False)
 
 
 # ✅ Save LDA visualization
-# vis_data = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
-# pyLDAvis.save_html(vis_data, os.path.join(output_folder, "lda_visualization.html"))
+vis_data = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+pyLDAvis.save_html(vis_data, os.path.join(output_folder, "lda_visualization.html"))
 
 print(f"✅ LDA topic modeling completed. Results saved to {args.file_output}")

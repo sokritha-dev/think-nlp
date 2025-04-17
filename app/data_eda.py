@@ -13,9 +13,6 @@ eda = EDA(args.file_input)
 print("\n🔍 Checking Data Quality...")
 eda.check_data_quality()
 
-print("\n📊 Plotting Sentiment Distribution...")
-eda.plot_sentiment_distribution()
-
 print("\n📝 Plotting Text Length Distribution...")
 eda.plot_text_length_distribution()
 
