@@ -15,4 +15,14 @@ class FileRecord(Base):
     columns = Column(String, nullable=False)  # store as comma-separated
     record_count = Column(Integer, nullable=False)
     file_hash = Column(String, nullable=False, unique=True)  # ✅ for deduplication
+    normalized_s3_key = Column(String, nullable=True)
+    normalized_s3_url = Column(String, nullable=True)
+    special_cleaned_s3_key = Column(String, nullable=True)
+    special_cleaned_s3_url = Column(String, nullable=True)
+    tokenized_s3_key = Column(String, nullable=True)
+    tokenized_s3_url = Column(String, nullable=True)
+    stopword_s3_key = Column(String, nullable=True)
+    stopword_s3_url = Column(String, nullable=True)
+    lemmatized_s3_key = Column(String, nullable=True)
+    lemmatized_s3_url = Column(String, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())

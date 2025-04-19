@@ -52,6 +52,7 @@ async def upload_csv(
                 status="success",
                 message="This file was previously uploaded. Reusing the existing file.",
                 data=UploadData(
+                    file_id=existing.id,
                     file_url=existing.s3_url,
                     s3_key=existing.s3_key,
                     columns=existing.columns.split(","),
@@ -84,6 +85,7 @@ async def upload_csv(
             status="success",
             message="File uploaded successfully",
             data=UploadData(
+                file_id=file_record.id,  # ✅ include this
                 file_url=s3_url,
                 s3_key=s3_key,
                 columns=df.columns.tolist(),

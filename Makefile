@@ -52,7 +52,7 @@ view-report:
 # 🐳 Docker Database Commands
 # ----------------------------
 up:
-	docker-compose up -d
+	docker-compose --env-file .env.local up -d
 	@echo "✅ PostgreSQL is up and running."
 
 down:

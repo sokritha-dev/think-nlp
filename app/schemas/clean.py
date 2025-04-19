@@ -1,35 +1,54 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel
 from app.schemas.common import BaseResponse
 
 
 class NormalizeRequest(BaseModel):
-    text: str
+    file_id: str
+    broken_map: Optional[Dict[str, str]] = None
 
 
 class NormalizeData(BaseModel):
-    original: str
-    normalized: str
+    file_id: str
+    normalized_s3_url: str
+    record_count: int
+    columns: List[str]
 
 
 class NormalizeResponse(BaseResponse):
     data: NormalizeData
 
 
-# Response for /remove-special
+# Request & Response for /remove-special
+class SpecialCleanRequest(BaseModel):
+    file_id: str
+    remove_special: bool = True
+    remove_numbers: bool = True
+    remove_emoji: bool = True
+
+
 class SpecialCharCleanedData(BaseModel):
-    original: str
-    cleaned: str
+    file_id: str
+    cleaned_s3_url: str
+    record_count: int
+    columns: list[str]
+    removed_characters: list[str]
 
 
 class SpecialCharCleanedResponse(BaseResponse):
-    data: SpecialCharCleanedData
+    data: Optional[SpecialCharCleanedData] = None
 
 
 # Response for /tokenize
+class TokenizeRequest(BaseModel):
+    file_id: str
+
+
 class TokenizedData(BaseModel):
-    original: str
-    tokens: List[str]
+    file_id: str
+    tokenized_s3_url: str
+    record_count: int
+    columns: list[str]
 
 
 class TokenizedResponse(BaseResponse):
@@ -37,15 +56,17 @@ class TokenizedResponse(BaseResponse):
 
 
 class StopwordTokenRequest(BaseModel):
-    tokens: List[str]
+    file_id: str
     custom_stopwords: Optional[List[str]] = []
     exclude_stopwords: Optional[List[str]] = []
 
 
 class StopwordTokenResponseData(BaseModel):
-    original_tokens: List[str]
-    cleaned_tokens: List[str]
-    removed_stopwords: List[str]
+    file_id: str
+    tokenized_s3_url: str
+    stopword_s3_url: str
+    record_count: int
+    columns: List[str]
 
 
 class StopwordTokenResponse(BaseResponse):
@@ -53,13 +74,15 @@ class StopwordTokenResponse(BaseResponse):
 
 
 class LemmatizeRequest(BaseModel):
-    tokens: List[str]
+    file_id: str
 
 
 class LemmatizedData(BaseModel):
-    original_tokens: List[str]
-    lemmatized_tokens: List[str]
-    changes: List[tuple[str, str]]
+    file_id: str
+    tokenized_s3_url: str
+    lemmatized_s3_url: str
+    record_count: int
+    columns: List[str]
 
 
 class LemmatizedResponse(BaseResponse):

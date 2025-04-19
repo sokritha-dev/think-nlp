@@ -1,4 +1,5 @@
 import re
+from typing import Dict, Optional
 import contractions
 import nltk
 from nltk.corpus import stopwords
@@ -48,9 +49,11 @@ nltk.download("wordnet")
 lemmatizer = WordNetLemmatizer()
 
 
-def fix_broken_contractions(text):
-    """Manually fix common incorrectly spaced contractions"""
-    broken_map = {
+def fix_broken_contractions(
+    text: str, broken_map: Optional[Dict[str, str]] = None
+) -> str:
+    """Fix common or user-defined broken contractions."""
+    default_map = {
         "ca n't": "can't",
         "wo n't": "won't",
         "did n't": "didn't",
@@ -69,7 +72,8 @@ def fix_broken_contractions(text):
         "might n't": "mightn't",
     }
 
-    for broken, fixed in broken_map.items():
+    final_map = broken_map if broken_map else default_map
+    for broken, fixed in final_map.items():
         text = text.replace(broken, fixed)
     return text
 
@@ -122,9 +126,17 @@ def clean_to_sentence(text, custom_stopwords):
     return [clean_text(s, custom_stopwords) for s in sentences]
 
 
-def normalize_text(text: str) -> str:
+def normalize_text(text: str, broken_map: Optional[Dict[str, str]] = None) -> str:
+    """
+    Normalize text by:
+    - Fixing broken contractions (customizable)
+    - Expanding contractions
+    - Unicode normalization
+    - Lowercasing
+    - Removing extra whitespace
+    """
     text = unicodedata.normalize("NFKC", text)
-    text = fix_broken_contractions(text)
+    text = fix_broken_contractions(text, broken_map)
     text = contractions.fix(text)
     text = text.lower().strip()
     text = re.sub(r"\s{2,}", " ", text)

@@ -4,6 +4,7 @@ from app.schemas.common import BaseResponse
 
 
 class UploadData(BaseModel):
+    file_id: str
     file_url: str
     s3_key: str
     columns: List[str]

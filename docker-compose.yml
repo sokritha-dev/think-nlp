@@ -22,12 +22,15 @@ services:
       - .env.local
     ports:
       - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
     networks:
       - nlp-net
 
 
 volumes:
   pgdata:
+  pgadmin_data:
 
 networks:
   nlp-net:
