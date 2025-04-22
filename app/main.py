@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import clean, upload
+from app.api import clean, eda, topic_modeling, upload
 import logging
 
 logging.basicConfig(
@@ -27,6 +27,8 @@ app.add_middleware(
 # Register routes
 app.include_router(upload.router)
 app.include_router(clean.router)
+app.include_router(eda.router)
+app.include_router(topic_modeling.router)
 # app.include_router(eda.router, prefix="/api/eda")
 # app.include_router(topic_model.router, prefix="/api/topic-model")
 # app.include_router(topic_label.router, prefix="/api/topic-label")

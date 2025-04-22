@@ -1,114 +1,91 @@
+from io import BytesIO
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from wordcloud import WordCloud
-from collections import Counter
+from sklearn.feature_extraction.text import CountVectorizer
 import nltk
 from nltk.corpus import stopwords
-from sklearn.feature_extraction.text import CountVectorizer
-
+from app.services.s3_uploader import upload_file_to_s3
 
 nltk.download("stopwords")
 
 
 class EDA:
-    def __init__(self, filepath):
-        """Initialize EDA with the dataset"""
-        self.df = pd.read_csv(filepath)
-        self.text_column = "review"
+    def __init__(self, df: pd.DataFrame, file_id: str):
+        self.df = df
+        self.file_id = file_id
+        self.text_column = "lemmatized_tokens"
+        self.image_urls = {}
 
-    def check_data_quality(self):
-        """Check missing values and duplicate rows"""
-        print("Missing Values:\n", self.df.isnull().sum())
-        print("\nDuplicate Rows:", self.df.duplicated().sum())
+    def _upload_plot(self, fig, key_prefix: str) -> str:
+        buf = BytesIO()
+        fig.savefig(buf, format="png")
+        buf.seek(0)
+        s3_key = f"eda/{self.file_id}/{key_prefix}.png"
+        return upload_file_to_s3(buf, s3_key, content_type="image/png")
 
-    def plot_sentiment_distribution(self):
-        """Plot distribution of sentiment labels"""
-        plt.figure(figsize=(6, 4))
-        sns.countplot(x=self.df["sentiment"])
-        plt.title("Sentiment Distribution")
-        plt.savefig("app/reports/sentiment_distribution.png")
-        plt.show()
+    def _plot_ngrams(self, n: int, top_k: int = 20):
+        vectorizer = CountVectorizer(
+            stop_words="english",
+            ngram_range=(n, n),
+            token_pattern=r"\b\w+\b",  # Keep punctuation removed
+        )
+        docs = self.df[self.text_column].astype(str)
+        X = vectorizer.fit_transform(docs)
+        vocab = vectorizer.get_feature_names_out()
+        freqs = X.sum(axis=0).A1
+        ngram_freq = (
+            pd.Series(freqs, index=vocab).sort_values(ascending=False).head(top_k)
+        )
 
-    def plot_text_length_distribution(self):
-        """Plot histogram of review text lengths"""
+        fig = plt.figure(figsize=(10, 5))
+        sns.barplot(x=ngram_freq.values, y=ngram_freq.index)
+        plt.title(f"Top {top_k} {n}-grams")
+        plt.xlabel("Frequency")
+        plt.tight_layout()
+
+        key = f"{n}gram"
+        self.image_urls[key] = self._upload_plot(fig, key)
+        plt.close(fig)
+
+    def run_eda(self):
+        # Text length distribution
         self.df["text_length"] = (
             self.df[self.text_column].astype(str).apply(lambda x: len(x.split()))
         )
-        plt.figure(figsize=(8, 5))
+        fig_len = plt.figure(figsize=(8, 5))
         sns.histplot(self.df["text_length"], bins=30, kde=True)
         plt.title("Distribution of Review Text Lengths")
-        plt.savefig("app/reports/text_length_distribution.png")
-        plt.show()
-
-    def generate_word_cloud(self):
-        """Generate and plot word cloud from review text"""
-        text = " ".join(review for review in self.df[self.text_column].astype(str))
-        wordcloud = WordCloud(width=800, height=400, background_color="white").generate(
-            text
+        self.image_urls["length_distribution"] = self._upload_plot(
+            fig_len, "length_distribution"
         )
+        plt.close(fig_len)
 
-        plt.figure(figsize=(10, 5))
+        # Word cloud
+        wordcloud = WordCloud(width=800, height=400, background_color="white").generate(
+            " ".join(self.df[self.text_column].astype(str))
+        )
+        fig_wc = plt.figure(figsize=(10, 5))
         plt.imshow(wordcloud, interpolation="bilinear")
         plt.axis("off")
-        plt.title("Word Cloud of Reviews")
-        plt.savefig("app/reports/word_cloud.png")
-        plt.show()
+        self.image_urls["word_cloud"] = self._upload_plot(fig_wc, "word_cloud")
+        plt.close(fig_wc)
 
-    def get_common_words(self, sentiment, num_words=10):
-        """Find the most common words for a given sentiment"""
-        text = " ".join(
-            self.df[self.df["review"] == sentiment][self.text_column].astype(str)
-        )
-        words = text.split()
-        return Counter(words).most_common(num_words)
-
-    def plot_most_common_words(self, num_words=20):
-        """Optimized: Plot the most common words in the dataset"""
-        stop_words = set(stopwords.words("english"))  # Faster lookup with set()
-
-        # Extract words efficiently
-        words = (
-            self.df[self.text_column]
-            .astype(str)
-            .str.lower()
-            .str.split()
-            .explode()  # Turns lists into rows for faster processing
-        )
-
-        # Remove stopwords and punctuation efficiently
-        words = words[~words.isin(stop_words) & words.str.isalpha()]  # Fast filtering
-
-        # Count most common words
-        word_counts = words.value_counts().head(num_words)
-
-        # Plot
-        plt.figure(figsize=(8, 5))
+        # Word frequency
+        stop_words = set(stopwords.words("english"))
+        words = self.df[self.text_column].astype(str).str.lower().str.split().explode()
+        words = words[~words.isin(stop_words) & words.str.isalpha()]
+        word_counts = words.value_counts().head(20)
+        fig_freq = plt.figure(figsize=(8, 5))
         sns.barplot(x=word_counts.index, y=word_counts.values)
         plt.xticks(rotation=45)
         plt.title("Top 20 Most Common Words")
-        plt.savefig("app/reports/word_frequency.png")
-        plt.show()
+        self.image_urls["common_words"] = self._upload_plot(fig_freq, "word_frequency")
+        plt.close(fig_freq)
 
-    def plot_top_ngrams(self, ngram_range=(2, 2), num_ngrams=20):
-        """Plot the most common n-grams in the dataset"""
-        vectorizer = CountVectorizer(
-            stop_words="english",
-            ngram_range=ngram_range,
-        )
-        text_data = self.df[self.text_column].astype(str).values
-        X = vectorizer.fit_transform(text_data)
-        ngram_freq = X.sum(axis=0).A1  # Flatten sparse matrix
-        vocab = vectorizer.get_feature_names_out()
-        ngram_freq = pd.Series(ngram_freq, index=vocab).sort_values(ascending=False)
+        # Bigram and Trigram plots
+        self._plot_ngrams(n=2, top_k=20)
+        self._plot_ngrams(n=3, top_k=20)
 
-        top_ngrams = ngram_freq.head(num_ngrams)
-
-        # Plot
-        plt.figure(figsize=(10, 5))
-        sns.barplot(x=top_ngrams.values, y=top_ngrams.index)
-        plt.title(f"Top {num_ngrams} {'-'.join(map(str, ngram_range))}-grams")
-        plt.xlabel("Frequency")
-        plt.tight_layout()
-        plt.savefig(f"app/reports/{ngram_range}ngram_top_words.png")
-        plt.show()
+        return self.image_urls

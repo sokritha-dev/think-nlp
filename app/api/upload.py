@@ -62,7 +62,7 @@ async def upload_csv(
 
         # Step 2: Upload to S3
         s3_key = f"user-data/{uuid4()}.csv"
-        s3_url = upload_file_to_s3(BytesIO(contents), s3_key)
+        s3_url = upload_file_to_s3(BytesIO(contents), s3_key, content_type="text/csv")
         s3_uploaded = True
 
         # Step 3: Save to DB

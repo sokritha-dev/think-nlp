@@ -1,3 +1,4 @@
+from io import BytesIO
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import settings
@@ -17,14 +18,20 @@ def get_s3_client():
     )
 
 
-def upload_file_to_s3(file_obj, s3_key: str) -> str:
+def upload_file_to_s3(
+    file_obj: BytesIO, s3_key: str, content_type: str = "application/octet-stream"
+) -> str:
+    file_obj.seek(0)
     s3 = get_s3_client()
     try:
         s3.upload_fileobj(
             file_obj,
             settings.AWS_S3_BUCKET_NAME,
             s3_key,
-            ExtraArgs={"ContentType": "text/csv"},
+            ExtraArgs={
+                "ContentType": content_type,
+                "ContentDisposition": "inline",  # allows browser to render it instead of download
+            },
         )
         url = f"https://{settings.AWS_S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
         return url

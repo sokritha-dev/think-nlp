@@ -1,3 +1,4 @@
+from datetime import datetime
 from io import BytesIO
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,7 +28,11 @@ from app.services.preprocess import (
 )
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.services.s3_uploader import download_file_from_s3, upload_file_to_s3
+from app.services.s3_uploader import (
+    delete_file_from_s3,
+    download_file_from_s3,
+    upload_file_to_s3,
+)
 
 import logging
 
@@ -47,25 +52,35 @@ async def normalize_reviews_by_file_id(
         if not record:
             raise HTTPException(status_code=404, detail="File ID not found")
 
-        # Download original CSV
+        # 🗑️ Delete previous normalized file from S3 if it exists
+        if record.normalized_s3_key:
+            try:
+                delete_file_from_s3(record.normalized_s3_key)
+                logger.info(
+                    f"🗑️ Deleted old normalized file: {record.normalized_s3_key}"
+                )
+            except Exception as err:
+                logger.warning(f"⚠️ Could not delete old normalized file: {err}")
+
+        # 📥 Download original CSV
         file_bytes = download_file_from_s3(record.s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # Normalize using custom map
+        # 🔄 Normalize using custom map
         normalized_df = df[["review"]].dropna().copy()
         normalized_df["normalized_review"] = normalized_df["review"].apply(
             lambda r: normalize_text(r, broken_map)
         )
 
-        # Save normalized CSV to S3
+        # 💾 Save normalized CSV to S3
         output_buffer = BytesIO()
         normalized_df.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
 
         new_s3_key = f"normalization/normalized_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
-        # Update DB
+        # 📝 Update DB
         record.normalized_s3_key = new_s3_key
         record.normalized_s3_url = s3_url
         db.commit()
@@ -97,6 +112,18 @@ async def remove_special_characters_by_file(
                 detail="File not found or normalization must be done first.",
             )
 
+        # ✅ Delete old special cleaned file if exists
+        if record.special_cleaned_s3_key:
+            try:
+                delete_file_from_s3(record.special_cleaned_s3_key)
+                logger.info(
+                    f"🗑️ Deleted old cleaned file: {record.special_cleaned_s3_key}"
+                )
+            except Exception as del_err:
+                logger.warning(
+                    f"⚠️ Failed to delete old special cleaned file: {del_err}"
+                )
+
         # ✅ Download the normalized file from S3
         file_bytes = download_file_from_s3(record.normalized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
@@ -122,7 +149,7 @@ async def remove_special_characters_by_file(
         output_buffer.seek(0)
 
         new_s3_key = f"cleaned/special_cleaned_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
         # ✅ Save to DB
         record.special_cleaned_s3_key = new_s3_key
@@ -157,25 +184,33 @@ async def tokenize_reviews_by_file_id(
         if not record or not record.special_cleaned_s3_key:
             raise HTTPException(status_code=404, detail="Cleaned file not found")
 
-        # 2. Download the cleaned file
+        # ✅ 2. Delete existing tokenized file from S3 if exists
+        if record.tokenized_s3_key:
+            try:
+                delete_file_from_s3(record.tokenized_s3_key)
+                logger.info(f"🗑️ Deleted old tokenized file: {record.tokenized_s3_key}")
+            except Exception as del_err:
+                logger.warning(f"⚠️ Failed to delete old tokenized file: {del_err}")
+
+        # 3. Download the cleaned file
         file_bytes = download_file_from_s3(record.special_cleaned_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # 3. Tokenize the cleaned text
+        # 4. Tokenize the cleaned text
         df["tokens"] = df["special_cleaned"].dropna().apply(tokenize_text)
 
-        # ✅ 4. Only keep relevant columns
+        # 5. Only keep relevant columns
         df_filtered = df[["special_cleaned", "tokens"]]
 
-        # 5. Save new result to S3
+        # 6. Save new result to S3
         output_buffer = BytesIO()
         df_filtered.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
 
         new_s3_key = f"tokenization/tokens_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
-        # 6. Update database
+        # 7. Update database
         record.tokenized_s3_key = new_s3_key
         record.tokenized_s3_url = s3_url
         db.commit()
@@ -206,12 +241,20 @@ async def remove_stopwords_by_file_id(
         if not record or not record.tokenized_s3_key:
             raise HTTPException(status_code=404, detail="Tokenized file not found")
 
-        # Download and read tokenized data
+        # ✅ Delete old stopword_removed file if exists
+        if record.stopword_s3_key:
+            try:
+                delete_file_from_s3(record.stopword_s3_key)
+                logger.info(f"🗑️ Deleted old stopword file: {record.stopword_s3_key}")
+            except Exception as del_err:
+                logger.warning(f"⚠️ Failed to delete old stopword file: {del_err}")
+
+        # ⬇️ Download and read tokenized data
         file_bytes = download_file_from_s3(record.tokenized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
         df["tokens"] = df["tokens"].apply(eval)
 
-        # Remove stopwords using your helper
+        # 🧹 Remove stopwords
         stopword_results = df["tokens"].apply(
             lambda toks: remove_stopwords_from_tokens(
                 tokens=toks,
@@ -219,19 +262,17 @@ async def remove_stopwords_by_file_id(
                 exclude_stopwords=req.exclude_stopwords or [],
             )
         )
-
-        # Extract cleaned tokens only
         df["stopword_removed"] = stopword_results.map(lambda r: r["cleaned_tokens"])
 
-        # Save to new CSV
+        # 💾 Upload new file
         output_buffer = BytesIO()
         df[["tokens", "stopword_removed"]].to_csv(output_buffer, index=False)
         output_buffer.seek(0)
 
         new_s3_key = f"stopwords/stopword_removed_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
-        # Update DB
+        # 🔁 Update DB
         record.stopword_s3_key = new_s3_key
         record.stopword_s3_url = s3_url
         db.commit()
@@ -263,6 +304,18 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
                 status_code=404, detail="Stopword-removed file not found"
             )
 
+        # ✅ Delete previous lemmatized file if it exists
+        if record.lemmatized_s3_key:
+            try:
+                delete_file_from_s3(record.lemmatized_s3_key)
+                logger.info(
+                    f"🗑️ Deleted old lemmatized file: {record.lemmatized_s3_key}"
+                )
+            except Exception as del_err:
+                logger.warning(
+                    f"⚠️ Failed to delete previous lemmatized file: {del_err}"
+                )
+
         # 1. Download from S3 and load CSV
         file_bytes = download_file_from_s3(record.stopword_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
@@ -279,11 +332,12 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
         output_buffer.seek(0)
 
         new_s3_key = f"lemmatization/lemmatized_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
         # 4. Save to DB
         record.lemmatized_s3_key = new_s3_key
         record.lemmatized_s3_url = s3_url
+        record.lemmatized_updated_at = datetime.now()
         db.commit()
 
         return LemmatizedResponse(
