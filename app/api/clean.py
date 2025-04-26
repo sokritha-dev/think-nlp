@@ -1,5 +1,6 @@
 from datetime import datetime
 from io import BytesIO
+import json
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 import pandas as pd
@@ -47,12 +48,27 @@ async def normalize_reviews_by_file_id(
     try:
         file_id = req.file_id
         broken_map = req.broken_map or {}
+        broken_map_json = json.dumps(broken_map, sort_keys=True)
 
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record:
             raise HTTPException(status_code=404, detail="File ID not found")
 
-        # 🗑️ Delete previous normalized file from S3 if it exists
+        # ✅ Skip recompute if normalized already and broken_map hasn't changed
+        if record.normalized_s3_key and record.normalized_broken_map == broken_map_json:
+            logger.info("⏩ Skipping normalization — no changes in broken_map.")
+            return NormalizeResponse(
+                status="success",
+                message="Normalization result already exists.",
+                data={
+                    "file_id": file_id,
+                    "normalized_s3_url": record.normalized_s3_url,
+                    "record_count": None,  # You can also cache this if needed
+                    "columns": ["review", "normalized_review"],
+                },
+            )
+
+        # 🗑️ Remove old S3 file if exists
         if record.normalized_s3_key:
             try:
                 delete_file_from_s3(record.normalized_s3_key)
@@ -60,19 +76,19 @@ async def normalize_reviews_by_file_id(
                     f"🗑️ Deleted old normalized file: {record.normalized_s3_key}"
                 )
             except Exception as err:
-                logger.warning(f"⚠️ Could not delete old normalized file: {err}")
+                logger.warning(f"⚠️ Failed to delete old normalized file: {err}")
 
-        # 📥 Download original CSV
+        # 📥 Download original file
         file_bytes = download_file_from_s3(record.s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # 🔄 Normalize using custom map
+        # 🔄 Normalize
         normalized_df = df[["review"]].dropna().copy()
         normalized_df["normalized_review"] = normalized_df["review"].apply(
             lambda r: normalize_text(r, broken_map)
         )
 
-        # 💾 Save normalized CSV to S3
+        # 💾 Upload new file
         output_buffer = BytesIO()
         normalized_df.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
@@ -83,6 +99,7 @@ async def normalize_reviews_by_file_id(
         # 📝 Update DB
         record.normalized_s3_key = new_s3_key
         record.normalized_s3_url = s3_url
+        record.normalized_broken_map = broken_map_json
         db.commit()
 
         return NormalizeResponse(
@@ -95,6 +112,7 @@ async def normalize_reviews_by_file_id(
                 "columns": normalized_df.columns.tolist(),
             },
         )
+
     except Exception as e:
         logger.exception(f"❌ Normalization failed::: {e}")
         raise HTTPException(status_code=500, detail="Normalization failed.")
@@ -112,25 +130,41 @@ async def remove_special_characters_by_file(
                 detail="File not found or normalization must be done first.",
             )
 
-        # ✅ Delete old special cleaned file if exists
+        current_flags = {
+            "remove_special": req.remove_special,
+            "remove_numbers": req.remove_numbers,
+            "remove_emoji": req.remove_emoji,
+        }
+
+        # ✅ Skip recompute if flags match and cleaned output exists
+        if record.special_cleaned_s3_key and record.special_cleaned_flags:
+            prev_flags = json.loads(record.special_cleaned_flags)
+            if prev_flags == current_flags:
+                return SpecialCharCleanedResponse(
+                    status="success",
+                    message="Special cleaned file already exists and matches options.",
+                    data=SpecialCharCleanedData(
+                        file_id=record.id,
+                        cleaned_s3_url=record.special_cleaned_s3_url,
+                        record_count=None,
+                        columns=[],
+                        removed_characters=[],
+                    ),
+                )
+
+        # 🗑️ Delete previous file if it exists
         if record.special_cleaned_s3_key:
             try:
                 delete_file_from_s3(record.special_cleaned_s3_key)
-                logger.info(
-                    f"🗑️ Deleted old cleaned file: {record.special_cleaned_s3_key}"
-                )
             except Exception as del_err:
                 logger.warning(
                     f"⚠️ Failed to delete old special cleaned file: {del_err}"
                 )
 
-        # ✅ Download the normalized file from S3
         file_bytes = download_file_from_s3(record.normalized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # ✅ Clean the normalized review column
-        cleaned_rows = []
-        removed_chars = []
+        cleaned_rows, removed_chars = [], []
         for row in df["normalized_review"].dropna():
             cleaned, removed = remove_special_characters(
                 row,
@@ -143,22 +177,23 @@ async def remove_special_characters_by_file(
 
         cleaned_df = pd.DataFrame(cleaned_rows)
 
-        # ✅ Upload new cleaned file to S3
         output_buffer = BytesIO()
         cleaned_df.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
 
         new_s3_key = f"cleaned/special_cleaned_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
 
-        # ✅ Save to DB
+        # ✅ Update DB
         record.special_cleaned_s3_key = new_s3_key
         record.special_cleaned_s3_url = s3_url
+        record.special_cleaned_flags = json.dumps(current_flags)
+        record.special_cleaned_updated_at = datetime.now()
         db.commit()
 
         return SpecialCharCleanedResponse(
             status="success",
-            message="Special characters removed from normalized text and saved to S3.",
+            message="Special characters removed and saved to S3.",
             data=SpecialCharCleanedData(
                 file_id=record.id,
                 cleaned_s3_url=s3_url,
@@ -167,7 +202,6 @@ async def remove_special_characters_by_file(
                 removed_characters=list(set(removed_chars)),
             ),
         )
-
     except Exception as e:
         logger.exception(f"❌ Failed to clean normalized text::: {e}")
         raise HTTPException(status_code=500, detail="Special cleaning failed.")
@@ -178,41 +212,49 @@ async def tokenize_reviews_by_file_id(
     req: TokenizeRequest, db: Session = Depends(get_db)
 ):
     try:
-        # 1. Fetch record
         file_id = req.file_id
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record or not record.special_cleaned_s3_key:
             raise HTTPException(status_code=404, detail="Cleaned file not found")
 
-        # ✅ 2. Delete existing tokenized file from S3 if exists
+        # ✅ Skip if already tokenized after special cleaned
+        if record.tokenized_updated_at and record.special_cleaned_updated_at:
+            if record.tokenized_updated_at >= record.special_cleaned_updated_at:
+                logger.info("⏩ Skipping tokenization — already up-to-date.")
+                return TokenizedResponse(
+                    status="success",
+                    message="Tokenized file already up-to-date.",
+                    data={
+                        "file_id": file_id,
+                        "tokenized_s3_url": record.tokenized_s3_url,
+                        "record_count": None,
+                        "columns": ["special_cleaned", "tokens"],
+                    },
+                )
+
+        # 🗑️ Delete existing tokenized file
         if record.tokenized_s3_key:
             try:
                 delete_file_from_s3(record.tokenized_s3_key)
-                logger.info(f"🗑️ Deleted old tokenized file: {record.tokenized_s3_key}")
             except Exception as del_err:
                 logger.warning(f"⚠️ Failed to delete old tokenized file: {del_err}")
 
-        # 3. Download the cleaned file
         file_bytes = download_file_from_s3(record.special_cleaned_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # 4. Tokenize the cleaned text
         df["tokens"] = df["special_cleaned"].dropna().apply(tokenize_text)
-
-        # 5. Only keep relevant columns
         df_filtered = df[["special_cleaned", "tokens"]]
 
-        # 6. Save new result to S3
         output_buffer = BytesIO()
         df_filtered.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
 
         new_s3_key = f"tokenization/tokens_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
+        s3_url = upload_file_to_s3(output_buffer, new_s3_key)
 
-        # 7. Update database
         record.tokenized_s3_key = new_s3_key
         record.tokenized_s3_url = s3_url
+        record.tokenized_updated_at = datetime.now()
         db.commit()
 
         return TokenizedResponse(
@@ -241,7 +283,41 @@ async def remove_stopwords_by_file_id(
         if not record or not record.tokenized_s3_key:
             raise HTTPException(status_code=404, detail="Tokenized file not found")
 
-        # ✅ Delete old stopword_removed file if exists
+        current_config = json.dumps(
+            {
+                "custom_stopwords": req.custom_stopwords or [],
+                "exclude_stopwords": req.exclude_stopwords or [],
+            }
+        )
+
+        print(f"tokenized updated at::: {record.tokenized_updated_at}")
+        print(f"stopword updated at::: {record.stopword_updated_at}")
+        print(
+            f"comparation::: {record.stopword_updated_at >= record.tokenized_updated_at}"
+        )
+        print(f"config change::: {record.stopword_config == current_config}")
+
+        # 🛑 Skip if no update & config unchanged
+        if (
+            record.stopword_s3_key
+            and record.tokenized_updated_at
+            and record.stopword_updated_at
+            and record.stopword_updated_at >= record.tokenized_updated_at
+            and record.stopword_config == current_config
+        ):
+            return StopwordTokenResponse(
+                status="success",
+                message="Already up-to-date. No stopword removal needed.",
+                data=StopwordTokenResponseData(
+                    file_id=file_id,
+                    tokenized_s3_url=record.tokenized_s3_url,
+                    stopword_s3_url=record.stopword_s3_url,
+                    record_count=None,
+                    columns=["tokens", "stopword_removed"],
+                ),
+            )
+
+        # 🗑️ Delete old stopword_removed file if exists
         if record.stopword_s3_key:
             try:
                 delete_file_from_s3(record.stopword_s3_key)
@@ -275,13 +351,15 @@ async def remove_stopwords_by_file_id(
         # 🔁 Update DB
         record.stopword_s3_key = new_s3_key
         record.stopword_s3_url = s3_url
+        record.stopword_config = current_config
+        record.stopword_updated_at = datetime.now()
         db.commit()
 
         return StopwordTokenResponse(
             status="success",
             message="Stopwords removed and saved to S3.",
             data=StopwordTokenResponseData(
-                file_id=req.file_id,
+                file_id=file_id,
                 tokenized_s3_url=record.tokenized_s3_url,
                 stopword_s3_url=s3_url,
                 record_count=len(df),
@@ -304,6 +382,26 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
                 status_code=404, detail="Stopword-removed file not found"
             )
 
+        # ✅ Skip recomputation if no changes
+        if (
+            record.lemmatized_s3_key
+            and record.stopword_updated_at
+            and record.lemmatized_updated_at
+            and record.lemmatized_updated_at >= record.stopword_updated_at
+        ):
+            logger.info("⏩ Skipping lemmatization — no change in stopword removal.")
+            return LemmatizedResponse(
+                status="success",
+                message="Already lemmatized. No changes.",
+                data=LemmatizedData(
+                    file_id=file_id,
+                    tokenized_s3_url=record.stopword_s3_url,
+                    lemmatized_s3_url=record.lemmatized_s3_url,
+                    record_count=None,
+                    columns=["stopword_removed", "lemmatized_tokens"],
+                ),
+            )
+
         # ✅ Delete previous lemmatized file if it exists
         if record.lemmatized_s3_key:
             try:
@@ -316,17 +414,17 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
                     f"⚠️ Failed to delete previous lemmatized file: {del_err}"
                 )
 
-        # 1. Download from S3 and load CSV
+        # ⬇️ Download from S3 and load CSV
         file_bytes = download_file_from_s3(record.stopword_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
         df["stopword_removed"] = df["stopword_removed"].apply(eval)
 
-        # 2. Apply lemmatization
+        # 🧬 Apply lemmatization
         df["lemmatized_tokens"] = df["stopword_removed"].apply(
             lambda tokens: lemmatize_tokens(tokens)["lemmatized_tokens"]
         )
 
-        # 3. Upload new file to S3
+        # 💾 Upload new file to S3
         output_buffer = BytesIO()
         df[["stopword_removed", "lemmatized_tokens"]].to_csv(output_buffer, index=False)
         output_buffer.seek(0)
@@ -334,7 +432,7 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
         new_s3_key = f"lemmatization/lemmatized_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
-        # 4. Save to DB
+        # 🔁 Update DB
         record.lemmatized_s3_key = new_s3_key
         record.lemmatized_s3_url = s3_url
         record.lemmatized_updated_at = datetime.now()

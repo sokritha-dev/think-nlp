@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 import pandas as pd
@@ -17,7 +18,6 @@ logger = logging.getLogger(__name__)
 @router.post("/summary")
 async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
     try:
-        # Step 1: Get file record
         file_id = req.file_id
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record:
@@ -26,11 +26,32 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
         if not record.lemmatized_s3_key:
             raise HTTPException(status_code=404, detail="Lemmatized file not found")
 
-        # Step 2: Download lemmatized file from S3
+        # ✅ Skip if EDA is already up-to-date
+        if (
+            record.eda_wordcloud_url
+            and record.eda_updated_at
+            and record.lemmatized_updated_at
+            and record.eda_updated_at >= record.lemmatized_updated_at
+        ):
+            logger.info("⏩ Skipping EDA — already up to date.")
+            return {
+                "status": "success",
+                "message": "EDA already computed. No update needed.",
+                "data": {
+                    "file_id": file_id,
+                    "word_cloud": record.eda_wordcloud_url,
+                    "length_distribution": record.eda_text_length_url,
+                    "common_words": record.eda_word_freq_url,
+                    "2gram": record.eda_bigram_url,
+                    "3gram": record.eda_trigram_url,
+                },
+            }
+
+        # Step 1: Download lemmatized file
         file_bytes = download_file_from_s3(record.lemmatized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        # Step 3: Delete old EDA files from S3
+        # Step 2: Delete old EDA images from S3
         for key_attr in [
             "eda_wordcloud_url",
             "eda_text_length_url",
@@ -41,23 +62,23 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
             old_url = getattr(record, key_attr)
             if old_url:
                 try:
-                    # Extract s3 key from full URL
                     s3_key = old_url.split("amazonaws.com/")[-1]
                     delete_file_from_s3(s3_key)
                     logger.info(f"🗑️ Deleted old EDA image: {s3_key}")
                 except Exception as del_err:
                     logger.warning(f"⚠️ Failed to delete {key_attr} from S3: {del_err}")
 
-        # Step 4: Run EDA
+        # Step 3: Run EDA and upload new images
         eda = EDA(df=df, file_id=file_id)
         image_urls = eda.run_eda()
 
-        # Step 5: Save new image URLs to DB
+        # Step 4: Save new image URLs and timestamp to DB
         record.eda_wordcloud_url = image_urls.get("word_cloud")
         record.eda_text_length_url = image_urls.get("length_distribution")
         record.eda_word_freq_url = image_urls.get("common_words")
         record.eda_bigram_url = image_urls.get("2gram")
         record.eda_trigram_url = image_urls.get("3gram")
+        record.eda_updated_at = datetime.now()
         db.commit()
 
         logger.info(f"✅ EDA completed for file {file_id}")
@@ -74,7 +95,6 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
     except HTTPException as he:
         logger.warning(f"⚠️ EDA error for file {req.file_id}: {he.detail}")
         raise he
-
     except Exception as e:
         logger.exception(f"❌ Failed to generate EDA for file {req.file_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate EDA.")

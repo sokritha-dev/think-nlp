@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -33,18 +34,17 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         if not record or not record.lemmatized_s3_key:
             raise HTTPException(status_code=404, detail="Lemmatized file not found")
 
-        # Check for recent result
         latest_lda = (
             db.query(TopicModel)
             .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.created_at.desc())
+            .order_by(TopicModel.updated_at.desc())
             .first()
         )
 
         if (
             latest_lda
             and record.lemmatized_updated_at
-            and latest_lda.created_at >= record.lemmatized_updated_at
+            and latest_lda.updated_at >= record.lemmatized_updated_at
         ):
             logger.info("⏩ Skipping LDA - result already up-to-date.")
             return LDATopicResponse(
@@ -57,7 +57,6 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 },
             )
 
-        # Download and read
         file_bytes = download_file_from_s3(record.lemmatized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
@@ -68,14 +67,11 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
 
         tokens = df["lemmatized_tokens"].astype(str)
 
-        # Topic count
         num_topics = req.num_topics or estimate_best_num_topics(tokens)
         logger.info(f"🔢 Using topic count: {num_topics}")
 
-        # Apply LDA
         df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
 
-        # Upload result
         output_buffer = BytesIO()
         df.to_csv(output_buffer, index=False)
         output_buffer.seek(0)
@@ -83,10 +79,8 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         new_s3_key = f"lda/lda_topics_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
 
-        # Save or update DB record
         existing = db.query(TopicModel).filter_by(file_id=file_id, method="LDA").first()
         if existing:
-            # ✅ Delete previous file from S3 before updating
             if existing.s3_key and existing.s3_key != new_s3_key:
                 try:
                     delete_file_from_s3(existing.s3_key)
@@ -98,6 +92,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             existing.s3_url = s3_url
             existing.topic_count = num_topics
             existing.summary_json = json.dumps(topic_summary)
+            existing.updated_at = datetime.now()
             db.commit()
         else:
             new_entry = TopicModel(
@@ -108,6 +103,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 s3_key=new_s3_key,
                 s3_url=s3_url,
                 summary_json=json.dumps(topic_summary),
+                updated_at=datetime.now(),
             )
             db.add(new_entry)
             db.commit()
@@ -141,18 +137,19 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         label_map = {}
         enriched_topics = []
 
-        # === Skip labeling if already labeled ===
+        # === Avoid recomputation if inputs haven't changed ===
+        prev_keywords = json.loads(topic_model.label_keywords or "[]")
+        prev_label_map = json.loads(topic_model.label_map_json or "{}")
+
         if (
-            all("label" in topic for topic in topic_summary)
-            and not req.label_map
-            and not req.keywords
+            all("label" in t for t in topic_summary)
+            and req.keywords == prev_keywords
+            and (req.label_map or {}) == prev_label_map
         ):
-            logger.info(
-                "⏩ Labeling skipped — already labeled and no user input provided."
-            )
+            logger.info("⏩ Skipping labeling — inputs unchanged.")
             return TopicLabelResponse(
                 status="success",
-                message="Topic labels already exist. No update performed.",
+                message="Labels already exist and inputs haven't changed.",
                 data=TopicLabelResponseData(
                     topic_model_id=topic_model.id,
                     labeled_s3_url=topic_model.s3_url,
@@ -186,28 +183,24 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
                 topic["confidence"] = None
                 topic["matched_with"] = "auto_generated"
 
-        # === Read and label file ===
+        # === Label the file ===
         file_bytes = download_file_from_s3(topic_model.s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
         df["topic_label"] = df["topic_id"].apply(
             lambda x: label_map.get(int(x), f"Topic {x}")
         )
 
-        # === Save labeled file to S3 ===
+        # === Upload to S3 ===
         buffer = BytesIO()
         df.to_csv(buffer, index=False)
         buffer.seek(0)
 
-        # Always strip older suffix before appending new
         new_s3_key = topic_model.s3_key.replace("_labeled", "").replace(
             ".csv", "_labeled.csv"
         )
-
-        # Delete old S3 file if key has changed
         if topic_model.s3_key != new_s3_key:
             try:
                 delete_file_from_s3(topic_model.s3_key)
-                logger.info(f"🗑️ Deleted old S3 file: {topic_model.s3_key}")
             except Exception as del_err:
                 logger.warning(f"⚠️ Failed to delete old S3 file: {del_err}")
 
@@ -217,6 +210,8 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         topic_model.s3_key = new_s3_key
         topic_model.s3_url = s3_url
         topic_model.summary_json = json.dumps(topic_summary)
+        topic_model.label_keywords = json.dumps(req.keywords or [])
+        topic_model.label_map_json = json.dumps(req.label_map or {})
         db.commit()
 
         return TopicLabelResponse(

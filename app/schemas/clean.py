@@ -11,7 +11,7 @@ class NormalizeRequest(BaseModel):
 class NormalizeData(BaseModel):
     file_id: str
     normalized_s3_url: str
-    record_count: int
+    record_count: Optional[int]
     columns: List[str]
 
 
@@ -30,7 +30,7 @@ class SpecialCleanRequest(BaseModel):
 class SpecialCharCleanedData(BaseModel):
     file_id: str
     cleaned_s3_url: str
-    record_count: int
+    record_count: Optional[int]
     columns: list[str]
     removed_characters: list[str]
 
@@ -47,7 +47,7 @@ class TokenizeRequest(BaseModel):
 class TokenizedData(BaseModel):
     file_id: str
     tokenized_s3_url: str
-    record_count: int
+    record_count: Optional[int]
     columns: list[str]
 
 
@@ -65,7 +65,7 @@ class StopwordTokenResponseData(BaseModel):
     file_id: str
     tokenized_s3_url: str
     stopword_s3_url: str
-    record_count: int
+    record_count: Optional[int]
     columns: List[str]
 
 
@@ -81,7 +81,7 @@ class LemmatizedData(BaseModel):
     file_id: str
     tokenized_s3_url: str
     lemmatized_s3_url: str
-    record_count: int
+    record_count: Optional[int]
     columns: List[str]
 
 

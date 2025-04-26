@@ -17,6 +17,11 @@ class TopicModel(Base):
     summary_json = Column(
         String, nullable=True
     )  # Can store topic/keyword info as JSON string
+    label_keywords = Column(String, nullable=True)
+    label_map_json = Column(String, nullable=True)
     created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

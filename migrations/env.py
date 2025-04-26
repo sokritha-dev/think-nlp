@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, pool
 # ✅ Import settings AFTER dotenv is loaded
 from app.core.config import settings
 from app.core.database import Base
-from app.models.db import file_record, topic_model
+from app.models.db import file_record, topic_model, sentiment_analysis
 
 
 # ✔️ Alembic config

@@ -18,6 +18,19 @@ def get_s3_client():
     )
 
 
+def generate_presigned_url(bucket: str, key: str, expires_in: int = 6000) -> str:
+    s3_client = get_s3_client()
+
+    try:
+        return s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to generate presigned URL: {e}")
+
+
 def upload_file_to_s3(
     file_obj: BytesIO, s3_key: str, content_type: str = "application/octet-stream"
 ) -> str:

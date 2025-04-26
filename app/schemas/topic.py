@@ -37,7 +37,7 @@ class TopicLabelResponseData(BaseModel):
     topic_model_id: str
     labeled_s3_url: str
     columns: List[str]
-    record_count: int
+    record_count: Optional[int]
     topics: List[TopicLabelTopic]
 
 
