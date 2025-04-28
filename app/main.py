@@ -31,6 +31,13 @@ app.include_router(eda.router)
 app.include_router(topic_modeling.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 # app.include_router(eda.router, prefix="/api/eda")
 # app.include_router(topic_model.router, prefix="/api/topic-model")
 # app.include_router(topic_label.router, prefix="/api/topic-label")

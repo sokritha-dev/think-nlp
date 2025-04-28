@@ -27,6 +27,24 @@ services:
     networks:
       - nlp-net
 
+  app:
+    build: .
+    container_name: nlp-app
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    networks:
+      - nlp-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 
 volumes:
   pgdata:

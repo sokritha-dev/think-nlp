@@ -88,7 +88,6 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
 python-multipart==0.0.20
 pytz==2025.2
-pywin32==310
 PyYAML==6.0.2
 pyzmq==26.4.0
 regex==2024.11.6
@@ -116,10 +115,10 @@ textblob==0.19.0
 textsearch==0.0.24
 thinc==8.3.4
 threadpoolctl==3.6.0
-tokenizers==0.15.2
+tokenizers>=0.19,<0.22
 torch==2.6.0
 tqdm==4.67.1
-transformers==4.35.2
+transformers>=4.41.0,<5.0.0
 typer==0.15.2
 typing_extensions==4.13.0
 tzdata==2025.2
