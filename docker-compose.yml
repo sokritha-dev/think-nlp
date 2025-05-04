@@ -1,9 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
-    container_name: nlp-postgres
     restart: unless-stopped
     env_file:
       - .env.local
@@ -40,11 +37,10 @@ services:
     networks:
       - nlp-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:

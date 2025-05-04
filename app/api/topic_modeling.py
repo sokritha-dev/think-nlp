@@ -1,10 +1,14 @@
+# app/api/topic.py
+
 from datetime import datetime
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from uuid import uuid4
 import pandas as pd
 from io import BytesIO
+import logging
+
 from app.core.database import get_db
 from app.models.db.file_record import FileRecord
 from app.models.db.topic_model import TopicModel
@@ -15,12 +19,24 @@ from app.schemas.topic import (
     TopicLabelResponse,
     TopicLabelResponseData,
 )
-from app.services.s3_uploader import download_file_from_s3, upload_file_to_s3
+from app.services.s3_uploader import (
+    download_file_from_s3,
+    upload_file_to_s3,
+    delete_file_from_s3,
+)
 from app.services.topic_labeling import auto_match_labels, generate_default_labels
 from app.services.topic_modeling import apply_lda_model, estimate_best_num_topics
-from app.services.s3_uploader import delete_file_from_s3
 
-import logging
+from app.utils.exceptions import NotFoundError, BadRequestError, ServerError
+from app.utils.response_builder import success_response
+from app.messages.topic_messages import (
+    LDA_COMPLETED,
+    LDA_UP_TO_DATE,
+    LEMMATIZED_FILE_NOT_FOUND,
+    LEMMATIZED_COLUMN_MISSING,
+    TOPIC_LABELING_COMPLETED,
+    TOPIC_MODEL_NOT_FOUND,
+)
 
 router = APIRouter(prefix="/api/topic", tags=["Topic Modeling"])
 logger = logging.getLogger(__name__)
@@ -32,7 +48,9 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         file_id = req.file_id
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record or not record.lemmatized_s3_key:
-            raise HTTPException(status_code=404, detail="Lemmatized file not found")
+            raise NotFoundError(
+                code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
+            )
 
         latest_lda = (
             db.query(TopicModel)
@@ -47,9 +65,8 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             and latest_lda.updated_at >= record.lemmatized_updated_at
         ):
             logger.info("⏩ Skipping LDA - result already up-to-date.")
-            return LDATopicResponse(
-                status="success",
-                message="Existing LDA result is still valid.",
+            return success_response(
+                message=LDA_UP_TO_DATE,
                 data={
                     "file_id": file_id,
                     "lda_topics_s3_url": latest_lda.s3_url,
@@ -61,12 +78,11 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         df = pd.read_csv(BytesIO(file_bytes))
 
         if "lemmatized_tokens" not in df.columns:
-            raise HTTPException(
-                status_code=400, detail="Missing 'lemmatized_tokens' column"
+            raise BadRequestError(
+                code="LEMMATIZED_COLUMN_MISSING", message=LEMMATIZED_COLUMN_MISSING
             )
 
         tokens = df["lemmatized_tokens"].astype(str)
-
         num_topics = req.num_topics or estimate_best_num_topics(tokens)
         logger.info(f"🔢 Using topic count: {num_topics}")
 
@@ -108,9 +124,8 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             db.add(new_entry)
             db.commit()
 
-        return LDATopicResponse(
-            status="success",
-            message="LDA topic modeling completed and saved to S3.",
+        return success_response(
+            message=LDA_COMPLETED,
             data={
                 "file_id": file_id,
                 "lda_topics_s3_url": s3_url,
@@ -118,12 +133,11 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             },
         )
 
-    except HTTPException as he:
-        logger.warning(f"⚠️ LDA modeling failed: {he.detail}")
-        raise he
+    except (NotFoundError, BadRequestError) as e:
+        raise e
     except Exception as e:
         logger.exception(f"❌ Unexpected LDA error: {e}")
-        raise HTTPException(status_code=500, detail="LDA topic modeling failed.")
+        raise ServerError(code="LDA_FAILED", message="LDA topic modeling failed.")
 
 
 @router.post("/label", response_model=TopicLabelResponse)
@@ -131,13 +145,14 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
     try:
         topic_model = db.query(TopicModel).filter_by(id=req.topic_model_id).first()
         if not topic_model:
-            raise HTTPException(status_code=404, detail="Topic model not found")
+            raise NotFoundError(
+                code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
+            )
 
         topic_summary = json.loads(topic_model.summary_json)
         label_map = {}
-        enriched_topics = []
 
-        # === Avoid recomputation if inputs haven't changed ===
+        # Check if recomputation needed
         prev_keywords = json.loads(topic_model.label_keywords or "[]")
         prev_label_map = json.loads(topic_model.label_map_json or "{}")
 
@@ -147,8 +162,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
             and (req.label_map or {}) == prev_label_map
         ):
             logger.info("⏩ Skipping labeling — inputs unchanged.")
-            return TopicLabelResponse(
-                status="success",
+            return success_response(
                 message="Labels already exist and inputs haven't changed.",
                 data=TopicLabelResponseData(
                     topic_model_id=topic_model.id,
@@ -164,7 +178,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
                 ),
             )
 
-        # === Labeling strategy ===
+        # Labeling logic
         if req.label_map:
             label_map = {int(k): v for k, v in req.label_map.items()}
             for topic in topic_summary:
@@ -183,14 +197,13 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
                 topic["confidence"] = None
                 topic["matched_with"] = "auto_generated"
 
-        # === Label the file ===
+        # Save labeled file
         file_bytes = download_file_from_s3(topic_model.s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
         df["topic_label"] = df["topic_id"].apply(
             lambda x: label_map.get(int(x), f"Topic {x}")
         )
 
-        # === Upload to S3 ===
         buffer = BytesIO()
         df.to_csv(buffer, index=False)
         buffer.seek(0)
@@ -206,7 +219,6 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
 
         s3_url = upload_file_to_s3(buffer, new_s3_key)
 
-        # === Update DB ===
         topic_model.s3_key = new_s3_key
         topic_model.s3_url = s3_url
         topic_model.summary_json = json.dumps(topic_summary)
@@ -214,9 +226,8 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         topic_model.label_map_json = json.dumps(req.label_map or {})
         db.commit()
 
-        return TopicLabelResponse(
-            status="success",
-            message="Topics labeled and saved to S3.",
+        return success_response(
+            message=TOPIC_LABELING_COMPLETED,
             data=TopicLabelResponseData(
                 topic_model_id=topic_model.id,
                 labeled_s3_url=s3_url,
@@ -226,6 +237,10 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
             ),
         )
 
+    except NotFoundError as e:
+        raise e
     except Exception as e:
         logger.exception(f"❌ Topic labeling failed: {e}")
-        raise HTTPException(status_code=500, detail="Topic labeling failed.")
+        raise ServerError(
+            code="TOPIC_LABELING_FAILED", message="Topic labeling failed."
+        )

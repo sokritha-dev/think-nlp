@@ -9,6 +9,7 @@ class SentimentRequest(BaseModel):
 
 class SentimentTopicBreakdown(BaseModel):
     label: str
+    keywords: List[str]
     positive: float
     neutral: float
     negative: float

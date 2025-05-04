@@ -1,13 +1,19 @@
+from datetime import datetime
 import json
 from uuid import uuid4
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 import pandas as pd
 from io import BytesIO
 import logging
 
 from app.core.database import get_db
+from app.messages.analysis_messages import (
+    SENTIMENT_ANALYSIS_ALREADY_EXISTS,
+    SENTIMENT_ANALYSIS_SUCCESS,
+    TOPIC_FILE_INVALID,
+)
+from app.messages.topic_messages import TOPIC_MODEL_NOT_FOUND
 from app.models.db.sentiment_analysis import SentimentAnalysis
 from app.models.db.topic_model import TopicModel
 from app.services.s3_uploader import download_file_from_s3
@@ -22,6 +28,8 @@ from app.services.sentiment_analysis import (
     analyze_sentiment_textblob,
     analyze_sentiment_vader,
 )
+from app.utils.response_builder import success_response
+from app.utils.exceptions import NotFoundError, ServerError
 
 router = APIRouter(prefix="/api/sentiment", tags=["Sentiment"])
 logger = logging.getLogger(__name__)
@@ -43,9 +51,10 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
     try:
         topic_model = db.query(TopicModel).filter_by(id=req.topic_model_id).first()
         if not topic_model:
-            raise HTTPException(status_code=404, detail="Topic model not found")
+            raise NotFoundError(
+                code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
+            )
 
-        # ✅ Check for cached result
         existing = (
             db.query(SentimentAnalysis)
             .filter_by(topic_model_id=req.topic_model_id, method=req.method)
@@ -57,26 +66,19 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             and topic_model.updated_at
             and existing.updated_at >= topic_model.updated_at
         ):
-            logger.info("⏩ Skipping sentiment computation - result still valid.")
-            return SentimentResponse(
-                status="success",
-                message=f"Sentiment already computed using {req.method}.",
-                data=json.loads(existing.result_json),
+            return success_response(
+                message=SENTIMENT_ANALYSIS_ALREADY_EXISTS,
+                data=json.loads(existing.per_topic_json),
             )
 
-        # 🧠 Recompute sentiment
         file_bytes = download_file_from_s3(topic_model.s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
 
-        if (
-            "lemmatized_tokens" not in df.columns
-            or "topic_id" not in df.columns
-            or "topic_label" not in df.columns
+        if not all(
+            col in df.columns
+            for col in ["lemmatized_tokens", "topic_id", "topic_label"]
         ):
-            raise HTTPException(
-                status_code=400,
-                detail="Required columns missing in topic-labeled file",
-            )
+            raise ServerError(code="TOPIC_FILE_INVALID", message=TOPIC_FILE_INVALID)
 
         df["text"] = df["lemmatized_tokens"].apply(
             lambda x: " ".join(eval(x)) if isinstance(x, str) else str(x)
@@ -85,7 +87,6 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             lambda x: classify_sentiment(x, req.method.lower())
         )
 
-        # 📊 Calculate sentiment
         sentiment_counts = df["sentiment"].value_counts().to_dict()
         total = len(df)
         overall = {
@@ -94,9 +95,17 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             "negative": round((sentiment_counts.get("negative", 0) / total) * 100, 1),
         }
 
+        topic_summary = json.loads(topic_model.summary_json)
+        topic_map = {int(t["topic_id"]): t for t in topic_summary}
+
         topic_stats = []
         for topic_id, group in df.groupby("topic_label"):
             count = len(group)
+            tid = int(group["topic_id"].iloc[0])
+            keywords = topic_map.get(tid, {}).get("keywords", [])
+            if isinstance(keywords, str):
+                keywords = [k.strip() for k in keywords.split(",")]
+
             topic_stats.append(
                 SentimentTopicBreakdown(
                     label=topic_id,
@@ -109,10 +118,10 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
                     negative=round(
                         (group["sentiment"] == "negative").sum() / count * 100, 1
                     ),
+                    keywords=keywords,
                 )
             )
 
-        # 💾 Save to DB
         summary_result = SentimentChartData(
             overall=overall, per_topic=topic_stats
         ).model_dump()
@@ -130,12 +139,14 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
         db.add(entry)
         db.commit()
 
-        return SentimentResponse(
-            status="success",
-            message=f"Sentiment analysis completed using {req.method}.",
-            data=summary_result,
-        )
+        return success_response(message=SENTIMENT_ANALYSIS_SUCCESS, data=summary_result)
 
+    except NotFoundError as e:
+        raise e
+    except ServerError as e:
+        raise e
     except Exception as e:
-        logger.exception(f"❌ Sentiment analysis failed: {e}")
-        raise HTTPException(status_code=500, detail="Sentiment analysis failed")
+        logger.exception(f"Sentiment analysis failed: {e}")
+        raise ServerError(
+            code="SENTIMENT_ANALYSIS_FAILED", message="Sentiment analysis failed."
+        )

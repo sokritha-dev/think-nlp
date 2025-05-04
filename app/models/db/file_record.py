@@ -24,6 +24,7 @@ class FileRecord(Base):
     special_cleaned_s3_key = Column(String, nullable=True)
     special_cleaned_s3_url = Column(String, nullable=True)
     special_cleaned_flags = Column(String, nullable=True)
+    special_cleaned_removed = Column(String, nullable=True)
     special_cleaned_updated_at = Column(DateTime(timezone=True), nullable=True)
     tokenized_s3_key = Column(String, nullable=True)
     tokenized_s3_url = Column(String, nullable=True)

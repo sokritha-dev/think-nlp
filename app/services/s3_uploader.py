@@ -1,12 +1,12 @@
 from io import BytesIO
+from typing import Optional
+from uuid import uuid4
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
-
-print(f"settings aws:: {settings.AWS_ACCESS_KEY_ID}")
 
 
 def get_s3_client():
@@ -70,3 +70,19 @@ def download_file_from_s3(s3_key: str) -> bytes:
     except (BotoCoreError, ClientError) as e:
         logger.warning(f"⚠️ Failed to download {s3_key} from S3: {e}")
         raise
+
+
+def save_csv_to_s3(df, folder: str, suffix: str, base_key: Optional[str] = None):
+    """Helper function to save a dataframe to S3."""
+    buffer = BytesIO()
+    df.to_csv(buffer, index=False)
+    buffer.seek(0)
+
+    if base_key:
+        # Reuse the base key but modify suffix
+        new_key = base_key.replace(".csv", f"_{suffix}.csv")
+    else:
+        new_key = f"{folder}/{suffix}_{uuid4()}.csv"
+
+    url = upload_file_to_s3(buffer, new_key, content_type="text/csv")
+    return new_key, url

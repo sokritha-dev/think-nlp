@@ -1,0 +1,17 @@
+FILE_NOT_FOUND = "File ID not found."
+NORMALIZATION_ALREADY_EXISTS = "Normalization result already exists."
+NORMALIZATION_SUCCESS = "Reviews normalized and saved to S3."
+NORMALIZED_FILE_NOT_FOUND = "File not found or normalization must be done first."
+SPECIAL_CLEAN_ALREADY_EXISTS = (
+    "Special cleaned file already exists and matches options."
+)
+SPECIAL_CLEAN_SUCCESS = "Special characters removed and saved to S3."
+CLEANED_FILE_NOT_FOUND = "Cleaned file not found."
+TOKENIZATION_ALREADY_EXISTS = "Tokenized file already up-to-date."
+TOKENIZATION_SUCCESS = "Cleaned reviews tokenized and saved to S3."
+TOKENIZED_FILE_NOT_FOUND = "Tokenized file not found."
+STOPWORD_ALREADY_EXISTS = "Already up-to-date. No stopword removal needed."
+STOPWORD_SUCCESS = "Stopwords removed and saved to S3."
+STOPWORD_FILE_NOT_FOUND = "Stopword-removed file not found."
+LEMMATIZATION_ALREADY_EXISTS = "Already lemmatized. No changes."
+LEMMATIZATION_SUCCESS = "Lemmatized tokens saved to S3."

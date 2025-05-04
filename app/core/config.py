@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     PGADMIN_DEFAULT_EMAIL: str | None = None
     PGADMIN_DEFAULT_PASSWORD: str | None = None
 
+    SAMPLE_FILE_ID: str
+
     class Config:
         # Dynamically choose the env file
         env_file = f".env.{os.getenv('ENV', 'local')}"  # default to .env.local

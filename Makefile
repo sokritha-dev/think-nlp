@@ -78,18 +78,49 @@ reset-db:
 pgadmin:
 	open http://localhost:5050
 
-# Run Alembic migrations
-init-alembic:
-	alembic init migrations
 
+# Environment configuration
+ENV ?= local
+SERVICE_NAME ?= app  # Change this if your Docker service is named differently
+
+# Alembic: Initialize migrations directory
+init-alembic:
+	docker compose exec $(SERVICE_NAME) alembic init migrations
+
+# Alembic: Create new revision (requires message m="...")
 revision:
 ifndef m
-	$(error ❌ Please provide a message with m="message")
+	$(error ❌ Please provide a message with m="your message")
 endif
-	ENV=local alembic revision --autogenerate -m "$(m)"
+	docker compose exec $(SERVICE_NAME) alembic revision --autogenerate -m "$(m)"
 
+# Alembic: Apply latest migration
 migrate:
-	ENV=local alembic upgrade head
+	docker compose exec $(SERVICE_NAME) alembic upgrade head
+
+# Alembic: Downgrade one revision
+downgrade:
+	docker compose exec $(SERVICE_NAME) alembic downgrade -1
+
+# Alembic: Check current DB version
+current:
+	docker compose exec $(SERVICE_NAME) alembic current
+
+# Alembic: Show migration history
+history:
+	docker compose exec $(SERVICE_NAME) alembic history
+
+# Show help
+help:
+	@echo ""
+	@echo "Available commands:"
+	@echo "  make init-alembic         Initialize Alembic in your project"
+	@echo "  make revision m=\"msg\"     Create a migration with message"
+	@echo "  make migrate              Upgrade DB to latest revision"
+	@echo "  make downgrade            Downgrade one revision"
+	@echo "  make current              Show current DB version"
+	@echo "  make history              Show migration history"
+	@echo ""
 
 
 
