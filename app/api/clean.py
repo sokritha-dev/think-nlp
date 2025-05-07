@@ -1,6 +1,7 @@
 # app/api/clean.py
 
-from fastapi import APIRouter, Depends
+import ast
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from datetime import datetime
 from uuid import uuid4
@@ -9,6 +10,7 @@ import json
 import logging
 import pandas as pd
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.messages.clean_messages import (
     CLEANED_FILE_NOT_FOUND,
@@ -71,7 +73,7 @@ async def normalize_reviews_by_file_id(
         # Reuse existing normalized data if broken_map is unchanged
         if record.normalized_s3_key and record.normalized_broken_map == broken_map_json:
             presigned_url = generate_presigned_url(
-                bucket="nlp-learner", key=record.normalized_s3_key
+                bucket=settings.AWS_S3_BUCKET_NAME, key=record.normalized_s3_key
             )
             preview_bytes = download_file_from_s3(record.normalized_s3_key)
             df = pd.read_csv(BytesIO(preview_bytes))
@@ -108,7 +110,9 @@ async def normalize_reviews_by_file_id(
 
         new_s3_key = f"normalization/normalized_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key)
-        presigned_url = generate_presigned_url(bucket="nlp-learner", key=new_s3_key)
+        presigned_url = generate_presigned_url(
+            bucket=settings.AWS_S3_BUCKET_NAME, key=new_s3_key
+        )
 
         record.normalized_s3_key = new_s3_key
         record.normalized_s3_url = s3_url
@@ -155,7 +159,9 @@ async def get_normalized_reviews(
         file_bytes = download_file_from_s3(record.normalized_s3_key)
         df = pd.read_csv(BytesIO(file_bytes))
         presigned_url = generate_presigned_url(
-            bucket="nlp-learner", key=record.normalized_s3_key, expires_in=6000
+            bucket=settings.AWS_S3_BUCKET_NAME,
+            key=record.normalized_s3_key,
+            expires_in=6000,
         )
 
         start = (page - 1) * limit
@@ -203,7 +209,7 @@ async def remove_special_characters_by_file(
         # Use cached result if flags are the same
         if record.special_cleaned_s3_key and record.special_cleaned_flags == flags_json:
             presigned_url = generate_presigned_url(
-                "nlp-learner", record.special_cleaned_s3_key
+                settings.AWS_S3_BUCKET_NAME, record.special_cleaned_s3_key
             )
             preview_bytes = download_file_from_s3(record.special_cleaned_s3_key)
             df = pd.read_csv(BytesIO(preview_bytes))
@@ -218,6 +224,11 @@ async def remove_special_characters_by_file(
                     ),
                     "before": df["normalized_review"].dropna().tolist()[:20],
                     "after": df["special_cleaned"].dropna().tolist()[:20],
+                    "flags": {
+                        "remove_special": req.remove_special,
+                        "remove_numbers": req.remove_numbers,
+                        "remove_emoji": req.remove_emoji,
+                    },
                 },
             )
 
@@ -253,7 +264,7 @@ async def remove_special_characters_by_file(
 
         new_s3_key = f"cleaned/special_cleaned_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key)
-        presigned_url = generate_presigned_url("nlp-learner", new_s3_key)
+        presigned_url = generate_presigned_url(settings.AWS_S3_BUCKET_NAME, new_s3_key)
 
         # Update DB record
         record.special_cleaned_s3_key = new_s3_key
@@ -272,6 +283,11 @@ async def remove_special_characters_by_file(
                 "removed_characters": list(set(removed_chars)),
                 "before": cleaned_df["normalized_review"].tolist()[:20],
                 "after": cleaned_df["special_cleaned"].tolist()[:20],
+                "flags": {
+                    "remove_special": req.remove_special,
+                    "remove_numbers": req.remove_numbers,
+                    "remove_emoji": req.remove_emoji,
+                },
             },
         )
 
@@ -300,7 +316,7 @@ async def get_special_cleaned_reviews(
             )
 
         presigned_url = generate_presigned_url(
-            "nlp-learner", record.special_cleaned_s3_key
+            settings.AWS_S3_BUCKET_NAME, record.special_cleaned_s3_key
         )
 
         # Load preview from S3
@@ -311,6 +327,7 @@ async def get_special_cleaned_reviews(
         end = start + page_size
         before = df["normalized_review"].dropna().tolist()[start:end]
         after = df["special_cleaned"].dropna().tolist()[start:end]
+        flags = json.loads(record.special_cleaned_flags or "{}")
 
         return success_response(
             message=SPECIAL_CLEAN_ALREADY_EXISTS,
@@ -323,6 +340,11 @@ async def get_special_cleaned_reviews(
                 "before": before,
                 "after": after,
                 "total_records": len(df),
+                "flags": {
+                    "remove_special": flags.get("remove_special", True),
+                    "remove_numbers": flags.get("remove_numbers", True),
+                    "remove_emoji": flags.get("remove_emoji", True),
+                },
             },
         )
 
@@ -338,7 +360,10 @@ async def get_special_cleaned_reviews(
 
 @router.post("/tokenize")
 async def tokenize_reviews_by_file_id(
-    req: TokenizeRequest, db: Session = Depends(get_db)
+    req: TokenizeRequest,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
 ):
     try:
         record = db.query(FileRecord).filter_by(id=req.file_id).first()
@@ -347,17 +372,34 @@ async def tokenize_reviews_by_file_id(
                 code="CLEANED_FILE_NOT_FOUND", message=CLEANED_FILE_NOT_FOUND
             )
 
+        # Check if tokenization is up to date
         if record.tokenized_updated_at and record.special_cleaned_updated_at:
             if record.tokenized_updated_at >= record.special_cleaned_updated_at:
+                file_bytes = download_file_from_s3(record.tokenized_s3_key)
+                df = pd.read_csv(BytesIO(file_bytes))
+                start, end = (page - 1) * page_size, page * page_size
+                presigned_url = generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, record.tokenized_s3_key
+                )
                 return success_response(
                     message=TOKENIZATION_ALREADY_EXISTS,
                     data={
                         "file_id": record.id,
-                        "tokenized_s3_url": record.tokenized_s3_url,
-                        "columns": ["special_cleaned", "tokens"],
+                        "tokenized_s3_url": presigned_url,
+                        "total_records": len(df),
+                        "columns": df.columns.tolist(),
+                        "before": df["special_cleaned"].fillna("").tolist()[start:end],
+                        "after": df["tokens"]
+                        .fillna("")
+                        .apply(
+                            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+                        )
+                        .tolist()[start:end],
+                        "should_recompute": False,
                     },
                 )
 
+        # Delete old tokenized file if exists
         if record.tokenized_s3_key:
             try:
                 delete_file_from_s3(record.tokenized_s3_key)
@@ -377,18 +419,28 @@ async def tokenize_reviews_by_file_id(
         new_s3_key = f"tokenization/tokens_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key)
 
+        # Save to DB
         record.tokenized_s3_key = new_s3_key
         record.tokenized_s3_url = s3_url
         record.tokenized_updated_at = datetime.now()
         db.commit()
 
+        # Return paginated response
+        start, end = (page - 1) * page_size, page * page_size
+        before = df_filtered["special_cleaned"].fillna("").tolist()[start:end]
+        after = df_filtered["tokens"].fillna("").tolist()[start:end]
+        presigned_url = generate_presigned_url(settings.AWS_S3_BUCKET_NAME, new_s3_key)
+
         return success_response(
             message=TOKENIZATION_SUCCESS,
             data={
                 "file_id": record.id,
-                "tokenized_s3_url": s3_url,
-                "record_count": len(df_filtered),
+                "tokenized_s3_url": presigned_url,
+                "total_records": len(df_filtered),
                 "columns": df_filtered.columns.tolist(),
+                "before": before,
+                "after": after,
+                "should_recompute": False,
             },
         )
     except NotFoundError as e:
@@ -398,9 +450,82 @@ async def tokenize_reviews_by_file_id(
         raise ServerError(code="TOKENIZATION_FAILED", message="Tokenization failed.")
 
 
+@router.get("/tokenize")
+async def get_tokenized_preview(
+    file_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1),
+    db: Session = Depends(get_db),
+):
+    try:
+        record = db.query(FileRecord).filter_by(id=file_id).first()
+        if not record or not record.special_cleaned_s3_key:
+            raise NotFoundError(
+                code="CLEANED_FILE_NOT_FOUND", message=CLEANED_FILE_NOT_FOUND
+            )
+
+        if not record.tokenized_s3_key:
+            raise NotFoundError(
+                code="TOKENIZED_FILE_NOT_FOUND",
+                message="Tokenized data has not been generated yet.",
+            )
+
+        # Check if re-tokenization is needed
+        should_recompute = False
+        if record.tokenized_updated_at and record.special_cleaned_updated_at:
+            should_recompute = (
+                record.special_cleaned_updated_at > record.tokenized_updated_at
+            )
+
+        # Load tokenized file
+        file_bytes = download_file_from_s3(record.tokenized_s3_key)
+        df = pd.read_csv(BytesIO(file_bytes))
+
+        total = len(df)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = df.iloc[start:end]
+
+        before = paginated["special_cleaned"].fillna("").tolist()
+        after = (
+            df["tokens"]
+            .fillna("")
+            .apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else [])
+            .tolist()
+        )
+
+        return success_response(
+            message="Tokenized data preview retrieved successfully.",
+            data={
+                "file_id": file_id,
+                "tokenized_s3_url": generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, record.tokenized_s3_key
+                ),
+                "total_records": total,
+                "columns": df.columns.tolist(),
+                "before": before,
+                "after": after,
+                "should_recompute": should_recompute,
+            },
+        )
+
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        import logging
+
+        logging.exception(f"Failed to load tokenized data: {e}")
+        raise ServerError(
+            code="GET_TOKENIZED_FAILED", message="Failed to load tokenized data."
+        )
+
+
 @router.post("/remove-stopwords")
 async def remove_stopwords_by_file_id(
-    req: StopwordTokenRequest, db: Session = Depends(get_db)
+    req: StopwordTokenRequest,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
 ):
     try:
         record = db.query(FileRecord).filter_by(id=req.file_id).first()
@@ -409,30 +534,40 @@ async def remove_stopwords_by_file_id(
                 code="TOKENIZED_FILE_NOT_FOUND", message=TOKENIZED_FILE_NOT_FOUND
             )
 
-        current_config = json.dumps(
-            {
-                "custom_stopwords": req.custom_stopwords or [],
-                "exclude_stopwords": req.exclude_stopwords or [],
-            }
-        )
+        config = {
+            "custom_stopwords": req.custom_stopwords or [],
+            "exclude_stopwords": req.exclude_stopwords or [],
+        }
+        config_json = json.dumps(config, sort_keys=True)
 
         if (
             record.stopword_s3_key
-            and record.tokenized_updated_at
             and record.stopword_updated_at
+            and record.tokenized_updated_at
+            and record.stopword_updated_at >= record.tokenized_updated_at
+            and record.stopword_config == config_json
         ):
-            if (
-                record.stopword_updated_at >= record.tokenized_updated_at
-                and record.stopword_config == current_config
-            ):
-                return success_response(
-                    message=STOPWORD_ALREADY_EXISTS,
-                    data={
-                        "file_id": record.id,
-                        "stopword_s3_url": record.stopword_s3_url,
-                        "columns": ["tokens", "stopword_removed"],
-                    },
-                )
+            file_bytes = download_file_from_s3(record.stopword_s3_key)
+            df = pd.read_csv(BytesIO(file_bytes))
+            start, end = (page - 1) * page_size, page * page_size
+            return success_response(
+                message=STOPWORD_ALREADY_EXISTS,
+                data={
+                    "file_id": record.id,
+                    "stopword_s3_url": generate_presigned_url(
+                        settings.AWS_S3_BUCKET_NAME, record.stopword_s3_key
+                    ),
+                    "total_records": len(df),
+                    "columns": df.columns.tolist(),
+                    "before": df["tokens"].fillna("").apply(eval).tolist()[start:end],
+                    "after": df["stopword_removed"]
+                    .fillna("")
+                    .apply(eval)
+                    .tolist()[start:end],
+                    "should_recompute": False,
+                    "config": config,
+                },
+            )
 
         if record.stopword_s3_key:
             try:
@@ -462,19 +597,30 @@ async def remove_stopwords_by_file_id(
 
         record.stopword_s3_key = new_s3_key
         record.stopword_s3_url = s3_url
-        record.stopword_config = current_config
+        record.stopword_config = config_json
         record.stopword_updated_at = datetime.now()
         db.commit()
+
+        start, end = (page - 1) * page_size, page * page_size
+        before = df["tokens"].tolist()[start:end]
+        after = df["stopword_removed"].tolist()[start:end]
 
         return success_response(
             message=STOPWORD_SUCCESS,
             data={
                 "file_id": record.id,
-                "stopword_s3_url": s3_url,
-                "record_count": len(df),
-                "columns": ["tokens", "stopword_removed"],
+                "stopword_s3_url": generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, new_s3_key
+                ),
+                "total_records": len(df),
+                "columns": df.columns.tolist(),
+                "before": before,
+                "after": after,
+                "should_recompute": False,
+                "config": config,
             },
         )
+
     except NotFoundError as e:
         raise e
     except Exception as e:
@@ -484,8 +630,65 @@ async def remove_stopwords_by_file_id(
         )
 
 
+@router.get("/remove-stopwords")
+async def get_stopword_removal_preview(
+    file_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1),
+    db: Session = Depends(get_db),
+):
+    try:
+        record = db.query(FileRecord).filter_by(id=file_id).first()
+        if not record or not record.stopword_s3_key:
+            raise NotFoundError(
+                code="STOPWORD_REMOVED_NOT_FOUND",
+                message="Stopword-removed file not found.",
+            )
+
+        should_recompute = False
+        if record.tokenized_updated_at and record.stopword_updated_at:
+            should_recompute = record.tokenized_updated_at > record.stopword_updated_at
+
+        df = pd.read_csv(BytesIO(download_file_from_s3(record.stopword_s3_key)))
+
+        start, end = (page - 1) * page_size, page * page_size
+
+        return success_response(
+            message="Stopword-removed data preview retrieved successfully.",
+            data={
+                "file_id": file_id,
+                "stopword_s3_url": generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, record.stopword_s3_key
+                ),
+                "total_records": len(df),
+                "columns": df.columns.tolist(),
+                "before": df["tokens"].fillna("").apply(eval).tolist()[start:end],
+                "after": df["stopword_removed"]
+                .fillna("")
+                .apply(eval)
+                .tolist()[start:end],
+                "should_recompute": should_recompute,
+                "config": json.loads(record.stopword_config or "{}"),
+            },
+        )
+
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Failed to load stopword-removed data: {e}")
+        raise ServerError(
+            code="GET_STOPWORD_REMOVAL_FAILED",
+            message="Failed to load stopword-removed data.",
+        )
+
+
 @router.post("/lemmatize")
-async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_db)):
+async def lemmatize_by_file_id(
+    req: LemmatizeRequest,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+):
     try:
         record = db.query(FileRecord).filter_by(id=req.file_id).first()
         if not record or not record.stopword_s3_key:
@@ -493,35 +696,55 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
                 code="STOPWORD_FILE_NOT_FOUND", message=STOPWORD_FILE_NOT_FOUND
             )
 
+        # Load stopword data
+        file_bytes = download_file_from_s3(record.stopword_s3_key)
+        df = pd.read_csv(BytesIO(file_bytes))
+        df["stopword_removed"] = df["stopword_removed"].apply(eval)
+
+        # Determine if recomputation is needed
+        should_recompute = True
         if (
             record.lemmatized_s3_key
             and record.stopword_updated_at
             and record.lemmatized_updated_at
+            and record.lemmatized_updated_at >= record.stopword_updated_at
         ):
-            if record.lemmatized_updated_at >= record.stopword_updated_at:
-                return success_response(
-                    message=LEMMATIZATION_ALREADY_EXISTS,
-                    data={
-                        "file_id": record.id,
-                        "lemmatized_s3_url": record.lemmatized_s3_url,
-                        "columns": ["stopword_removed", "lemmatized_tokens"],
-                    },
-                )
+            should_recompute = False
 
+        if not should_recompute:
+            file_bytes = download_file_from_s3(record.lemmatized_s3_key)
+            df = pd.read_csv(BytesIO(file_bytes))
+            df["stopword_removed"] = df["stopword_removed"].apply(eval)
+            df["lemmatized_tokens"] = df["lemmatized_tokens"].apply(eval)
+            start, end = (page - 1) * page_size, page * page_size
+            return success_response(
+                message=LEMMATIZATION_ALREADY_EXISTS,
+                data={
+                    "file_id": record.id,
+                    "lemmatized_s3_url": generate_presigned_url(
+                        settings.AWS_S3_BUCKET_NAME, record.lemmatized_s3_key
+                    ),
+                    "total_records": len(df),
+                    "columns": df.columns.tolist(),
+                    "before": df["stopword_removed"].tolist()[start:end],
+                    "after": df["lemmatized_tokens"].tolist()[start:end],
+                    "should_recompute": False,
+                },
+            )
+
+        # Delete old file if exists
         if record.lemmatized_s3_key:
             try:
                 delete_file_from_s3(record.lemmatized_s3_key)
             except Exception as e:
                 logger.warning(f"Failed to delete old lemmatized file: {e}")
 
-        file_bytes = download_file_from_s3(record.stopword_s3_key)
-        df = pd.read_csv(BytesIO(file_bytes))
-        df["stopword_removed"] = df["stopword_removed"].apply(eval)
-
+        # Apply lemmatization
         df["lemmatized_tokens"] = df["stopword_removed"].apply(
             lambda tokens: lemmatize_tokens(tokens)["lemmatized_tokens"]
         )
 
+        # Save to S3
         output_buffer = BytesIO()
         df[["stopword_removed", "lemmatized_tokens"]].to_csv(output_buffer, index=False)
         output_buffer.seek(0)
@@ -529,18 +752,26 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
         new_s3_key = f"lemmatization/lemmatized_{uuid4()}.csv"
         s3_url = upload_file_to_s3(output_buffer, new_s3_key)
 
+        # Update DB
         record.lemmatized_s3_key = new_s3_key
         record.lemmatized_s3_url = s3_url
         record.lemmatized_updated_at = datetime.now()
         db.commit()
 
+        # Paginated response
+        start, end = (page - 1) * page_size, page * page_size
         return success_response(
             message=LEMMATIZATION_SUCCESS,
             data={
                 "file_id": record.id,
-                "lemmatized_s3_url": s3_url,
-                "record_count": len(df),
+                "lemmatized_s3_url": generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, new_s3_key
+                ),
+                "total_records": len(df),
                 "columns": ["stopword_removed", "lemmatized_tokens"],
+                "before": df["stopword_removed"].tolist()[start:end],
+                "after": df["lemmatized_tokens"].tolist()[start:end],
+                "should_recompute": False,
             },
         )
     except NotFoundError as e:
@@ -548,3 +779,54 @@ async def lemmatize_by_file_id(req: LemmatizeRequest, db: Session = Depends(get_
     except Exception as e:
         logger.exception(f"Lemmatization failed: {e}")
         raise ServerError(code="LEMMATIZATION_FAILED", message="Lemmatization failed.")
+
+
+@router.get("/lemmatize")
+async def get_lemmatization_preview(
+    file_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1),
+    db: Session = Depends(get_db),
+):
+    try:
+        record = db.query(FileRecord).filter_by(id=file_id).first()
+        if not record or not record.lemmatized_s3_key:
+            raise NotFoundError(
+                code="LEMMATIZED_FILE_NOT_FOUND",
+                message="Lemmatized file not found.",
+            )
+
+        # Load and parse
+        df = pd.read_csv(BytesIO(download_file_from_s3(record.lemmatized_s3_key)))
+        df["stopword_removed"] = df["stopword_removed"].apply(eval)
+        df["lemmatized_tokens"] = df["lemmatized_tokens"].apply(eval)
+
+        # Determine if stale
+        should_recompute = False
+        if record.stopword_updated_at and record.lemmatized_updated_at:
+            should_recompute = record.stopword_updated_at > record.lemmatized_updated_at
+
+        start, end = (page - 1) * page_size, page * page_size
+
+        return success_response(
+            message="Lemmatized data preview retrieved successfully.",
+            data={
+                "file_id": file_id,
+                "lemmatized_s3_url": generate_presigned_url(
+                    settings.AWS_S3_BUCKET_NAME, record.lemmatized_s3_key
+                ),
+                "total_records": len(df),
+                "columns": ["stopword_removed", "lemmatized_tokens"],
+                "before": df["stopword_removed"].tolist()[start:end],
+                "after": df["lemmatized_tokens"].tolist()[start:end],
+                "should_recompute": should_recompute,
+            },
+        )
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Failed to load lemmatized data: {e}")
+        raise ServerError(
+            code="GET_LEMMATIZED_FAILED",
+            message="Failed to load lemmatized data.",
+        )

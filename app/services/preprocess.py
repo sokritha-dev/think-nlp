@@ -7,9 +7,12 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import wordpunct_tokenize, sent_tokenize
 import unicodedata
 import emoji
+from nltk import pos_tag
+from nltk.corpus import wordnet
 
 
 # Download necessary resources once
+nltk.download("averaged_perceptron_tagger")
 nltk.download("stopwords")
 nltk.download("wordnet")
 
@@ -196,8 +199,27 @@ def remove_stopwords_from_tokens(
     }
 
 
+def nltk_to_wordnet_pos(tag: str) -> str:
+    if tag.startswith("J"):
+        return wordnet.ADJ
+    elif tag.startswith("V"):
+        return wordnet.VERB
+    elif tag.startswith("N"):
+        return wordnet.NOUN
+    elif tag.startswith("R"):
+        return wordnet.ADV
+    else:
+        return wordnet.NOUN  # Default fallback
+
+
 def lemmatize_tokens(tokens: list[str]) -> dict:
-    lemmatized = [lemmatizer.lemmatize(t) for t in tokens]
+    pos_tags = pos_tag(tokens, lang="eng")  # [('arrived', 'VBD'), ('room', 'NN'), ...]
+
+    lemmatized = [
+        lemmatizer.lemmatize(token, pos=nltk_to_wordnet_pos(tag))
+        for token, tag in pos_tags
+    ]
+
     changes = [(o, l) for o, l in zip(tokens, lemmatized) if o != l]
     return {
         "original_tokens": tokens,

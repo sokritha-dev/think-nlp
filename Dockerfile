@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Download NLTK vader_lexicon during image build
-RUN python -m nltk.downloader vader_lexicon stopwords wordnet
+RUN python -m nltk.downloader vader_lexicon stopwords wordnet averaged_perceptron_tagger averaged_perceptron_tagger_eng
 
 # Pre-download HuggingFace models
 RUN python -c "from transformers import pipeline; pipeline('sentiment-analysis')"
