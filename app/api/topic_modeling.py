@@ -8,6 +8,7 @@ from uuid import uuid4
 import pandas as pd
 from io import BytesIO
 import logging
+import gzip
 
 from app.core.database import get_db
 from app.models.db.file_record import FileRecord
@@ -69,13 +70,18 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 message=LDA_UP_TO_DATE,
                 data={
                     "file_id": file_id,
+                    "topic_model_id": latest_lda.id,
                     "lda_topics_s3_url": latest_lda.s3_url,
                     "topics": json.loads(latest_lda.summary_json),
                 },
             )
 
         file_bytes = download_file_from_s3(record.lemmatized_s3_key)
-        df = pd.read_csv(BytesIO(file_bytes))
+        if record.lemmatized_s3_key.endswith(".gz"):
+            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
+                df = pd.read_csv(gz)
+        else:
+            df = pd.read_csv(BytesIO(file_bytes))
 
         if "lemmatized_tokens" not in df.columns:
             raise BadRequestError(
@@ -89,11 +95,14 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
 
         output_buffer = BytesIO()
-        df.to_csv(output_buffer, index=False)
+        with gzip.GzipFile(fileobj=output_buffer, mode="wb") as gz:
+            df.to_csv(gz, index=False)
         output_buffer.seek(0)
 
-        new_s3_key = f"lda/lda_topics_{uuid4()}.csv"
-        s3_url = upload_file_to_s3(output_buffer, new_s3_key, content_type="text/csv")
+        new_s3_key = f"lda/lda_topics_{uuid4()}.csv.gz"
+        s3_url = upload_file_to_s3(
+            output_buffer, new_s3_key, content_type="application/gzip"
+        )
 
         existing = db.query(TopicModel).filter_by(file_id=file_id, method="LDA").first()
         if existing:
@@ -128,6 +137,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             message=LDA_COMPLETED,
             data={
                 "file_id": file_id,
+                "topic_model_id": existing.id if existing else new_entry.id,
                 "lda_topics_s3_url": s3_url,
                 "topics": topic_summary,
             },
@@ -199,18 +209,28 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
 
         # Save labeled file
         file_bytes = download_file_from_s3(topic_model.s3_key)
-        df = pd.read_csv(BytesIO(file_bytes))
+        if topic_model.s3_key.endswith(".gz"):
+            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
+                df = pd.read_csv(gz)
+        else:
+            df = pd.read_csv(BytesIO(file_bytes))
+
         df["topic_label"] = df["topic_id"].apply(
             lambda x: label_map.get(int(x), f"Topic {x}")
         )
 
         buffer = BytesIO()
-        df.to_csv(buffer, index=False)
+        with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
+            df.to_csv(gz, index=False)
         buffer.seek(0)
 
-        new_s3_key = topic_model.s3_key.replace("_labeled", "").replace(
-            ".csv", "_labeled.csv"
+        base_key = (
+            topic_model.s3_key.replace("_labeled", "")
+            .replace(".gz", "")
+            .replace(".csv", "")
         )
+        new_s3_key = f"{base_key}_labeled.csv.gz"
+
         if topic_model.s3_key != new_s3_key:
             try:
                 delete_file_from_s3(topic_model.s3_key)

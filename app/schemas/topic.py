@@ -11,6 +11,7 @@ class LDATopicRequest(BaseModel):
 
 class LDATopicResponseData(BaseModel):
     file_id: str
+    topic_model_id: str
     lda_topics_s3_url: str
     topics: List[Dict[str, str]]
 

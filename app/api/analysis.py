@@ -1,4 +1,5 @@
 from datetime import datetime
+import gzip
 import json
 from uuid import uuid4
 from fastapi import APIRouter, Depends
@@ -72,7 +73,11 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             )
 
         file_bytes = download_file_from_s3(topic_model.s3_key)
-        df = pd.read_csv(BytesIO(file_bytes))
+        if topic_model.s3_key.endswith(".gz"):
+            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
+                df = pd.read_csv(gz)
+        else:
+            df = pd.read_csv(BytesIO(file_bytes))
 
         if not all(
             col in df.columns

@@ -10,7 +10,11 @@ import logging
 from app.middlewares.file_validators import validate_csv
 from app.schemas.upload import UploadData, UploadResponse
 from app.services.hashing import compute_sha256
-from app.services.s3_uploader import upload_file_to_s3, delete_file_from_s3
+from app.services.s3_uploader import (
+    upload_compressed_csv_to_s3,
+    upload_file_to_s3,
+    delete_file_from_s3,
+)
 from app.core.database import get_db
 from app.models.db.file_record import FileRecord
 from app.utils.exceptions import BadRequestError, ServerError
@@ -71,8 +75,12 @@ async def upload_csv(
             )
 
         # Step 2: Upload to S3
-        s3_key = f"user-data/{uuid4()}.csv"
-        s3_url = upload_file_to_s3(BytesIO(contents), s3_key, content_type="text/csv")
+        # s3_key = f"user-data/{uuid4()}.csv"
+        # s3_url = upload_file_to_s3(BytesIO(contents), s3_key, content_type="text/csv")
+
+        s3_key = f"user-data/{uuid4()}.csv.gz"
+        s3_url = upload_compressed_csv_to_s3(contents, s3_key)
+
         s3_uploaded = True
 
         # Step 3: Save to DB

@@ -21,18 +21,23 @@ class FileRecord(Base):
     normalized_s3_key = Column(String, nullable=True)
     normalized_s3_url = Column(String, nullable=True)
     normalized_broken_map = Column(String, nullable=True)
+    normalized_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     special_cleaned_s3_key = Column(String, nullable=True)
     special_cleaned_s3_url = Column(String, nullable=True)
     special_cleaned_flags = Column(String, nullable=True)
     special_cleaned_removed = Column(String, nullable=True)
     special_cleaned_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     tokenized_s3_key = Column(String, nullable=True)
     tokenized_s3_url = Column(String, nullable=True)
     tokenized_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     stopword_s3_key = Column(String, nullable=True)
     stopword_s3_url = Column(String, nullable=True)
     stopword_updated_at = Column(DateTime(timezone=True), nullable=True)
     stopword_config = Column(String, nullable=True)
+
     lemmatized_s3_key = Column(String, nullable=True)
     lemmatized_s3_url = Column(String, nullable=True)
     lemmatized_updated_at = Column(DateTime(timezone=True), nullable=True)

@@ -1,6 +1,7 @@
 # app/api/eda.py
 
 from datetime import datetime
+import gzip
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 import pandas as pd
@@ -39,7 +40,7 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
 
-        # ✅ Skip if EDA is already up-to-date
+        # ✅ Skip if already up to date
         if (
             record.eda_wordcloud_url
             and record.eda_updated_at
@@ -59,9 +60,13 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
                 },
             )
 
-        # Step 1: Download lemmatized file
+        # Step 1: Download and decompress if needed
         file_bytes = download_file_from_s3(record.lemmatized_s3_key)
-        df = pd.read_csv(BytesIO(file_bytes))
+        if record.lemmatized_s3_key.endswith(".gz"):
+            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
+                df = pd.read_csv(gz)
+        else:
+            df = pd.read_csv(BytesIO(file_bytes))
 
         # Step 2: Delete old EDA images from S3
         for key_attr in [
@@ -84,7 +89,7 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
         eda = EDA(df=df, file_id=file_id)
         image_urls = eda.run_eda()
 
-        # Step 4: Save new image URLs and timestamp to DB
+        # Step 4: Save metadata to DB
         record.eda_wordcloud_url = image_urls.get("word_cloud")
         record.eda_text_length_url = image_urls.get("length_distribution")
         record.eda_word_freq_url = image_urls.get("common_words")

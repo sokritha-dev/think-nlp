@@ -1,6 +1,7 @@
 # app/api/pipeline.py
 
 from datetime import datetime
+import gzip
 import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -92,7 +93,12 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
                 )
 
         original_bytes = download_file_from_s3(record.s3_key)
-        df = pd.read_csv(BytesIO(original_bytes))
+        if record.s3_key.endswith(".gz"):
+            with gzip.GzipFile(fileobj=BytesIO(original_bytes)) as gz:
+                df = pd.read_csv(gz)
+        else:
+            df = pd.read_csv(BytesIO(original_bytes))
+
         df["normalized_review"] = df["review"].dropna().apply(normalize_text)
 
         norm_key, norm_url = save_csv_to_s3(df, "normalization", suffix="normalized")
@@ -316,7 +322,7 @@ def get_sample_data_url():
     try:
         s3_url = generate_presigned_url(
             bucket="nlp-learner",
-            key="user-data/799eb06b-30ba-43fc-84c4-6b3565513c78.csv",
+            key="user-data/25208d05-f86d-44d3-848f-da34f57f9a02.csv.gz",
         )
         return success_response(
             message=SAMPLE_DATA_URL_SUCCESS, data={"s3_url": s3_url}

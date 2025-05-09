@@ -1,8 +1,10 @@
+import gzip
 from io import BytesIO
-from typing import Optional
+from typing import Union
 from uuid import uuid4
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+import pandas as pd
 from app.core.config import settings
 import logging
 
@@ -53,6 +55,43 @@ def upload_file_to_s3(
         raise Exception(f"S3 upload failed: {str(e)}")
 
 
+def upload_compressed_csv_to_s3(
+    df_or_bytes: Union[pd.DataFrame, bytes],
+    s3_key: str,
+    content_type: str = "application/gzip",
+) -> str:
+    """
+    Compress and upload CSV data to S3 as a .csv.gz file.
+
+    Args:
+        df_or_bytes: A pandas DataFrame or raw CSV bytes.
+        s3_key: S3 key including `.csv.gz` suffix.
+        content_type: MIME type to set on the object.
+
+    Returns:
+        The S3 public URL of the uploaded file.
+    """
+    compressed_buffer = BytesIO()
+
+    # Handle both DataFrame and raw bytes
+    if isinstance(df_or_bytes, pd.DataFrame):
+        with gzip.GzipFile(fileobj=compressed_buffer, mode="wb") as gz_file:
+            df_or_bytes.to_csv(gz_file, index=False)
+    elif isinstance(df_or_bytes, bytes):
+        with gzip.GzipFile(fileobj=compressed_buffer, mode="wb") as gz_file:
+            gz_file.write(df_or_bytes)
+    else:
+        raise TypeError("Expected pandas.DataFrame or raw CSV bytes.")
+
+    compressed_buffer.seek(0)
+
+    return upload_file_to_s3(
+        compressed_buffer,
+        s3_key=s3_key,
+        content_type=content_type,
+    )
+
+
 def delete_file_from_s3(s3_key: str):
     s3 = get_s3_client()
     try:
@@ -72,17 +111,22 @@ def download_file_from_s3(s3_key: str) -> bytes:
         raise
 
 
-def save_csv_to_s3(df, folder: str, suffix: str, base_key: Optional[str] = None):
-    """Helper function to save a dataframe to S3."""
+def save_csv_to_s3(
+    df: pd.DataFrame, prefix: str, suffix: str = "", compress: bool = True
+):
+    key = (
+        f"{prefix}/{suffix}_{uuid4()}.csv.gz"
+        if compress
+        else f"{prefix}/{suffix}_{uuid4()}.csv"
+    )
     buffer = BytesIO()
-    df.to_csv(buffer, index=False)
-    buffer.seek(0)
 
-    if base_key:
-        # Reuse the base key but modify suffix
-        new_key = base_key.replace(".csv", f"_{suffix}.csv")
+    if compress:
+        with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
+            df.to_csv(gz, index=False)
     else:
-        new_key = f"{folder}/{suffix}_{uuid4()}.csv"
+        df.to_csv(buffer, index=False)
 
-    url = upload_file_to_s3(buffer, new_key, content_type="text/csv")
-    return new_key, url
+    buffer.seek(0)
+    s3_url = upload_file_to_s3(buffer, key)
+    return key, s3_url

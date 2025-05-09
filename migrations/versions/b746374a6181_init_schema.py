@@ -1,8 +1,8 @@
-"""init
+"""init schema
 
-Revision ID: 248cfb3e61e0
+Revision ID: b746374a6181
 Revises: 
-Create Date: 2025-04-28 14:48:35.331836
+Create Date: 2025-05-08 08:25:12.244398
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '248cfb3e61e0'
+revision: str = 'b746374a6181'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -32,9 +32,11 @@ def upgrade() -> None:
     sa.Column('normalized_s3_key', sa.String(), nullable=True),
     sa.Column('normalized_s3_url', sa.String(), nullable=True),
     sa.Column('normalized_broken_map', sa.String(), nullable=True),
+    sa.Column('normalized_updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('special_cleaned_s3_key', sa.String(), nullable=True),
     sa.Column('special_cleaned_s3_url', sa.String(), nullable=True),
     sa.Column('special_cleaned_flags', sa.String(), nullable=True),
+    sa.Column('special_cleaned_removed', sa.String(), nullable=True),
     sa.Column('special_cleaned_updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('tokenized_s3_key', sa.String(), nullable=True),
     sa.Column('tokenized_s3_url', sa.String(), nullable=True),
