@@ -3,14 +3,13 @@
 from datetime import datetime
 import gzip
 import json
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 import pandas as pd
 from uuid import uuid4
 from io import BytesIO
 import logging
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.models.db.file_record import FileRecord
 from app.models.db.topic_model import TopicModel
@@ -104,6 +103,7 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
         norm_key, norm_url = save_csv_to_s3(df, "normalization", suffix="normalized")
         record.normalized_s3_key = norm_key
         record.normalized_s3_url = norm_url
+        record.normalized_updated_at = datetime.now()
 
         cleaned_rows, removed_chars = [], []
         for row in df["normalized_review"].dropna():
@@ -258,18 +258,16 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
         )
 
 
-@router.get("/sample-result")
-def get_sample_result(db: Session = Depends(get_db)):
+@router.get("/result")
+def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
     try:
-        record = db.query(FileRecord).filter_by(id=settings.SAMPLE_FILE_ID).first()
+        record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record:
-            raise NotFoundError(
-                code="SAMPLE_FILE_NOT_FOUND", message=SAMPLE_FILE_NOT_FOUND
-            )
+            raise NotFoundError(code="FILE_NOT_FOUND", message=SAMPLE_FILE_NOT_FOUND)
 
         topic_model = (
             db.query(TopicModel)
-            .filter_by(file_id=settings.SAMPLE_FILE_ID, method="LDA")
+            .filter_by(file_id=file_id, method="LDA")
             .order_by(TopicModel.updated_at.desc())
             .first()
         )
@@ -296,9 +294,9 @@ def get_sample_result(db: Session = Depends(get_db)):
         ]
 
         return success_response(
-            message="Sample sentiment analysis loaded successfully.",
+            message="Sentiment analysis result loaded successfully.",
             data={
-                "file_id": settings.SAMPLE_FILE_ID,
+                "file_id": file_id,
                 "overall": {
                     "positive": sentiment.overall_positive,
                     "neutral": sentiment.overall_neutral,
@@ -311,9 +309,9 @@ def get_sample_result(db: Session = Depends(get_db)):
     except NotFoundError as e:
         raise e
     except Exception as e:
-        logger.exception(f"❌ Failed to load sample result: {e}")
+        logger.exception(f"❌ Failed to load result: {e}")
         raise ServerError(
-            code="SAMPLE_RESULT_FAILED", message="Failed to load sample result."
+            code="RESULT_LOAD_FAILED", message="Failed to load sentiment result."
         )
 
 

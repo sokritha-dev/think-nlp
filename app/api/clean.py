@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.messages.clean_messages import (
     CLEANED_FILE_NOT_FOUND,
+    DATA_CLEANING_STATUS,
     FILE_NOT_FOUND,
     LEMMATIZATION_ALREADY_EXISTS,
     LEMMATIZATION_SUCCESS,
@@ -30,6 +31,8 @@ from app.messages.clean_messages import (
     TOKENIZATION_SUCCESS,
     TOKENIZED_FILE_NOT_FOUND,
 )
+import time
+
 from app.models.db.file_record import FileRecord
 from app.schemas.clean import (
     LemmatizeRequest,
@@ -56,6 +59,54 @@ from app.utils.exceptions import NotFoundError, ServerError
 
 router = APIRouter(prefix="/api/clean", tags=["Cleaning"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/status")
+async def get_cleaning_status(
+    file_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        record = db.query(FileRecord).filter_by(id=file_id).first()
+        if not record:
+            raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
+
+        steps_status = [
+            {"step": "normalized", "should_recompute": False},
+            {
+                "step": "special_chars",
+                "should_recompute": record.normalized_updated_at
+                > record.special_cleaned_updated_at,
+            },
+            {
+                "step": "tokenized",
+                "should_recompute": record.special_cleaned_updated_at
+                > record.tokenized_updated_at,
+            },
+            {
+                "step": "stopwords",
+                "should_recompute": record.tokenized_updated_at
+                > record.stopword_updated_at,
+            },
+            {
+                "step": "lemmatized",
+                "should_recompute": record.stopword_updated_at
+                > record.lemmatized_updated_at,
+            },
+        ]
+
+        return success_response(
+            message=DATA_CLEANING_STATUS,
+            data={"steps": steps_status},
+        )
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Fetching data cleaning status failed: {e}")
+        raise ServerError(
+            code="CLEANING_STATUS_FAILED",
+            message="Could not fetch data cleaning step status.",
+        )
 
 
 @router.post("/normalize")
@@ -92,6 +143,7 @@ async def normalize_reviews_by_file_id(
                     "before": df["review"].dropna().tolist()[:20],
                     "after": df["normalized_review"].dropna().tolist()[:20],
                     "total_records": record.record_count,
+                    "should_recompute": False,
                 },
             )
 
@@ -142,6 +194,7 @@ async def normalize_reviews_by_file_id(
                 "broken_words": broken_map,
                 "before": normalized_df["review"].tolist()[:20],
                 "after": normalized_df["normalized_review"].tolist()[:20],
+                "should_recompute": False,
             },
         )
     except NotFoundError as e:
@@ -159,7 +212,9 @@ async def get_normalized_reviews(
     db: Session = Depends(get_db),
 ):
     try:
+        start = time.time()
         record = db.query(FileRecord).filter_by(id=file_id).first()
+        logger.info(f"Database request time: {time.time() - start:.2f}s")
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
 
@@ -170,9 +225,16 @@ async def get_normalized_reviews(
             )
 
         # ✅ Download and decompress gzip file
+        start = time.time()
         file_bytes = download_file_from_s3(record.normalized_s3_key)
+        logger.info(f"S3 Download request time: {time.time() - start:.2f}s")
+
+        start = time.time()
         with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
             df = pd.read_csv(gz)
+        logger.info(
+            f"Decompress & Access File request time: {time.time() - start:.2f}s"
+        )
 
         presigned_url = generate_presigned_url(
             bucket=settings.AWS_S3_BUCKET_NAME,
@@ -195,6 +257,7 @@ async def get_normalized_reviews(
                 "total_records": len(df),
                 "page": page,
                 "limit": limit,
+                "should_recompute": False,
             },
         )
     except NotFoundError as e:
@@ -333,6 +396,9 @@ async def get_special_cleaned_reviews(
                 code="SPECIAL_CLEAN_NOT_FOUND",
                 message="Special cleaned file not found for this file ID.",
             )
+
+        print(f"normalize_updated_at {record.normalized_updated_at}")
+        print(f"special cleaned updated at {record.special_cleaned_updated_at}")
 
         should_recompute = False
         if record.normalized_updated_at and record.special_cleaned_updated_at:

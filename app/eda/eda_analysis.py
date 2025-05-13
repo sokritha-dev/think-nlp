@@ -1,12 +1,8 @@
-from io import BytesIO
+from collections import Counter
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from wordcloud import WordCloud
 from sklearn.feature_extraction.text import CountVectorizer
 import nltk
 from nltk.corpus import stopwords
-from app.services.s3_uploader import upload_file_to_s3
 
 nltk.download("stopwords")
 
@@ -16,76 +12,48 @@ class EDA:
         self.df = df
         self.file_id = file_id
         self.text_column = "lemmatized_tokens"
-        self.image_urls = {}
 
-    def _upload_plot(self, fig, key_prefix: str) -> str:
-        buf = BytesIO()
-        fig.savefig(buf, format="png")
-        buf.seek(0)
-        s3_key = f"eda/{self.file_id}/{key_prefix}.png"
-        return upload_file_to_s3(buf, s3_key, content_type="image/png")
+    def run_eda(self) -> dict:
+        # Ensure column is string list
+        docs = self.df[self.text_column].dropna().astype(str)
 
-    def _plot_ngrams(self, n: int, top_k: int = 20):
+        # Word cloud data (top 100 words)
+        all_words = " ".join(docs).split()
+        word_freq = Counter(all_words)
+        word_cloud = [{"text": w, "value": c} for w, c in word_freq.most_common(100)]
+
+        # Text length distribution
+        length_series = docs.apply(lambda x: len(x.split()))
+        length_distribution = length_series.value_counts().sort_index().reset_index()
+        length_distribution.columns = ["length", "count"]
+        length_distribution_data = length_distribution.to_dict("records")
+
+        # Most common words (excluding stopwords)
+        stop_words = set(stopwords.words("english"))
+        tokenized = docs.str.split().explode().str.lower()
+        tokenized = tokenized[tokenized.str.isalpha() & ~tokenized.isin(stop_words)]
+
+        # Bigrams and Trigrams
+        bigrams = self._extract_ngrams(docs.tolist(), n=2, label="bigram")
+        trigrams = self._extract_ngrams(docs.tolist(), n=3, label="trigram")
+
+        return {
+            "word_cloud": word_cloud,
+            "length_distribution": length_distribution_data,
+            "bigrams": bigrams,
+            "trigrams": trigrams,
+        }
+
+    def _extract_ngrams(self, docs, n=2, top_k=20, label="ngram"):
         vectorizer = CountVectorizer(
             stop_words="english",
             ngram_range=(n, n),
-            token_pattern=r"\b\w+\b",  # Keep punctuation removed
+            token_pattern=r"\b\w+\b",
         )
-        docs = self.df[self.text_column].astype(str)
         X = vectorizer.fit_transform(docs)
         vocab = vectorizer.get_feature_names_out()
         freqs = X.sum(axis=0).A1
-        ngram_freq = (
+        freq_data = (
             pd.Series(freqs, index=vocab).sort_values(ascending=False).head(top_k)
         )
-
-        fig = plt.figure(figsize=(10, 5))
-        sns.barplot(x=ngram_freq.values, y=ngram_freq.index)
-        plt.title(f"Top {top_k} {n}-grams")
-        plt.xlabel("Frequency")
-        plt.tight_layout()
-
-        key = f"{n}gram"
-        self.image_urls[key] = self._upload_plot(fig, key)
-        plt.close(fig)
-
-    def run_eda(self):
-        # Text length distribution
-        self.df["text_length"] = (
-            self.df[self.text_column].astype(str).apply(lambda x: len(x.split()))
-        )
-        fig_len = plt.figure(figsize=(8, 5))
-        sns.histplot(self.df["text_length"], bins=30, kde=True)
-        plt.title("Distribution of Review Text Lengths")
-        self.image_urls["length_distribution"] = self._upload_plot(
-            fig_len, "length_distribution"
-        )
-        plt.close(fig_len)
-
-        # Word cloud
-        wordcloud = WordCloud(width=800, height=400, background_color="white").generate(
-            " ".join(self.df[self.text_column].astype(str))
-        )
-        fig_wc = plt.figure(figsize=(10, 5))
-        plt.imshow(wordcloud, interpolation="bilinear")
-        plt.axis("off")
-        self.image_urls["word_cloud"] = self._upload_plot(fig_wc, "word_cloud")
-        plt.close(fig_wc)
-
-        # Word frequency
-        stop_words = set(stopwords.words("english"))
-        words = self.df[self.text_column].astype(str).str.lower().str.split().explode()
-        words = words[~words.isin(stop_words) & words.str.isalpha()]
-        word_counts = words.value_counts().head(20)
-        fig_freq = plt.figure(figsize=(8, 5))
-        sns.barplot(x=word_counts.index, y=word_counts.values)
-        plt.xticks(rotation=45)
-        plt.title("Top 20 Most Common Words")
-        self.image_urls["common_words"] = self._upload_plot(fig_freq, "word_frequency")
-        plt.close(fig_freq)
-
-        # Bigram and Trigram plots
-        self._plot_ngrams(n=2, top_k=20)
-        self._plot_ngrams(n=3, top_k=20)
-
-        return self.image_urls
+        return [{label: k, "count": v} for k, v in freq_data.items()]

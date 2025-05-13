@@ -2,7 +2,7 @@
 
 from datetime import datetime
 import json
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from uuid import uuid4
 import pandas as pd
@@ -53,26 +53,22 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
 
-        latest_lda = (
-            db.query(TopicModel)
-            .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.updated_at.desc())
-            .first()
-        )
+        existing = db.query(TopicModel).filter_by(file_id=file_id, method="LDA").first()
 
         if (
-            latest_lda
+            existing
             and record.lemmatized_updated_at
-            and latest_lda.updated_at >= record.lemmatized_updated_at
+            and existing.updated_at >= record.lemmatized_updated_at
+            and req.num_topics == existing.topic_count
         ):
             logger.info("⏩ Skipping LDA - result already up-to-date.")
             return success_response(
                 message=LDA_UP_TO_DATE,
                 data={
                     "file_id": file_id,
-                    "topic_model_id": latest_lda.id,
-                    "lda_topics_s3_url": latest_lda.s3_url,
-                    "topics": json.loads(latest_lda.summary_json),
+                    "topic_model_id": existing.id,
+                    "lda_topics_s3_url": existing.s3_url,
+                    "topics": json.loads(existing.summary_json),
                 },
             )
 
@@ -104,7 +100,6 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             output_buffer, new_s3_key, content_type="application/gzip"
         )
 
-        existing = db.query(TopicModel).filter_by(file_id=file_id, method="LDA").first()
         if existing:
             if existing.s3_key and existing.s3_key != new_s3_key:
                 try:
@@ -168,7 +163,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
 
         if (
             all("label" in t for t in topic_summary)
-            and req.keywords == prev_keywords
+            and req.keywords == (prev_keywords or None)
             and (req.label_map or {}) == prev_label_map
         ):
             logger.info("⏩ Skipping labeling — inputs unchanged.")
@@ -263,4 +258,44 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         logger.exception(f"❌ Topic labeling failed: {e}")
         raise ServerError(
             code="TOPIC_LABELING_FAILED", message="Topic labeling failed."
+        )
+
+
+@router.get("/label", response_model=TopicLabelResponse)
+async def get_existing_topic_labels(
+    topic_model_id: str = Query(...),  # Required query param
+    db: Session = Depends(get_db),
+):
+    try:
+        topic_model = db.query(TopicModel).filter_by(id=topic_model_id).first()
+        if not topic_model:
+            raise NotFoundError(
+                code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
+            )
+
+        topic_summary = json.loads(topic_model.summary_json)
+
+        return success_response(
+            message="Topic labels retrieved successfully.",
+            data=TopicLabelResponseData(
+                topic_model_id=topic_model.id,
+                labeled_s3_url=topic_model.s3_url,
+                columns=[
+                    "stopword_removed",
+                    "lemmatized_tokens",
+                    "topic_id",
+                    "topic_label",
+                ],
+                record_count=None,
+                topics=topic_summary,
+            ),
+        )
+
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"❌ Failed to fetch topic labels: {e}")
+        raise ServerError(
+            code="TOPIC_LABEL_FETCH_FAILED",
+            message="Failed to retrieve topic labeling result.",
         )

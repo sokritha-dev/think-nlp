@@ -2,7 +2,7 @@ from datetime import datetime
 import gzip
 import json
 from uuid import uuid4
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 import pandas as pd
 from io import BytesIO
@@ -67,9 +67,19 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             and topic_model.updated_at
             and existing.updated_at >= topic_model.updated_at
         ):
+            summary_result = SentimentChartData(
+                overall={
+                    "positive": existing.overall_positive,
+                    "neutral": existing.overall_neutral,
+                    "negative": existing.overall_negative,
+                },
+                per_topic=json.loads(existing.per_topic_json),
+                should_recompute=False,
+            ).model_dump()
+
             return success_response(
                 message=SENTIMENT_ANALYSIS_ALREADY_EXISTS,
-                data=json.loads(existing.per_topic_json),
+                data=summary_result,
             )
 
         file_bytes = download_file_from_s3(topic_model.s3_key)
@@ -128,7 +138,7 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             )
 
         summary_result = SentimentChartData(
-            overall=overall, per_topic=topic_stats
+            overall=overall, per_topic=topic_stats, should_recompute=False
         ).model_dump()
 
         entry = SentimentAnalysis(
@@ -154,4 +164,55 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
         logger.exception(f"Sentiment analysis failed: {e}")
         raise ServerError(
             code="SENTIMENT_ANALYSIS_FAILED", message="Sentiment analysis failed."
+        )
+
+
+@router.get("/", response_model=SentimentResponse)
+async def get_sentiment_result(
+    topic_model_id: str = Query(...),
+    method: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        topic_model = db.query(TopicModel).filter_by(id=topic_model_id).first()
+        if not topic_model:
+            raise NotFoundError(
+                code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
+            )
+
+        existing = (
+            db.query(SentimentAnalysis)
+            .filter_by(topic_model_id=topic_model_id, method=method)
+            .order_by(SentimentAnalysis.updated_at.desc())
+            .first()
+        )
+
+        if not existing:
+            raise NotFoundError(
+                code="SENTIMENT_ANALYSIS_NOT_FOUND",
+                message="Sentiment Analysis not found.",
+            )
+
+        should_recompute = topic_model.updated_at > existing.updated_at
+        summary_result = SentimentChartData(
+            overall={
+                "positive": existing.overall_positive,
+                "neutral": existing.overall_neutral,
+                "negative": existing.overall_negative,
+            },
+            per_topic=json.loads(existing.per_topic_json),
+            should_recompute=should_recompute,
+        ).model_dump()
+
+        return success_response(
+            message=SENTIMENT_ANALYSIS_ALREADY_EXISTS,
+            data={**summary_result},
+        )
+
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"Sentiment lookup failed: {e}")
+        raise ServerError(
+            code="SENTIMENT_LOOKUP_FAILED", message="Failed to get sentiment analysis."
         )

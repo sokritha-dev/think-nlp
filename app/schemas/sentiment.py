@@ -18,6 +18,7 @@ class SentimentTopicBreakdown(BaseModel):
 class SentimentChartData(BaseModel):
     overall: Dict[str, float]  # {'positive': %, 'neutral': %, 'negative': %}
     per_topic: List[SentimentTopicBreakdown]
+    should_recompute: bool
 
 
 class SentimentResponse(BaseModel):

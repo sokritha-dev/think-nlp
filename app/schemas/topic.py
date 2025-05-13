@@ -30,8 +30,8 @@ class TopicLabelTopic(BaseModel):
     topic_id: str
     keywords: str
     label: str
-    confidence: float  # Change this if you need it to be rounded or string
-    matched_with: Optional[str] = None  # Optional, only if you return this field
+    confidence: Optional[float] = None
+    matched_with: Optional[str] = None
 
 
 class TopicLabelResponseData(BaseModel):
