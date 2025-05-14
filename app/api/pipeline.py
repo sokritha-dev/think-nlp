@@ -316,11 +316,12 @@ def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/sample-data-url")
-def get_sample_data_url():
+def get_sample_data_url(file_id: str = Query(...)):
     try:
+        s3_key = f"user-data/{file_id}.csv.gz"
         s3_url = generate_presigned_url(
             bucket="nlp-learner",
-            key="user-data/25208d05-f86d-44d3-848f-da34f57f9a02.csv.gz",
+            key=s3_key,
         )
         return success_response(
             message=SAMPLE_DATA_URL_SUCCESS, data={"s3_url": s3_url}

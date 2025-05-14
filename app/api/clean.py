@@ -286,7 +286,11 @@ async def remove_special_characters_by_file(
         flags_json = json.dumps(flags, sort_keys=True)
 
         # Use cached result if flags are the same
-        if record.special_cleaned_s3_key and record.special_cleaned_flags == flags_json:
+        if (
+            record.special_cleaned_s3_key
+            and record.special_cleaned_flags == flags_json
+            and record.normalized_updated_at < record.special_cleaned_updated_at
+        ):
             presigned_url = generate_presigned_url(
                 settings.AWS_S3_BUCKET_NAME, record.special_cleaned_s3_key
             )

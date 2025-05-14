@@ -273,6 +273,8 @@ async def get_existing_topic_labels(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
+        print(f"summary json::: {topic_model.summary_json}")
+
         topic_summary = json.loads(topic_model.summary_json)
 
         return success_response(

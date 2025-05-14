@@ -1,6 +1,6 @@
 # app/models/db/file_record.py
 
-from sqlalchemy import Column, String, Integer, DateTime
+from sqlalchemy import Boolean, Column, String, Integer, DateTime
 from sqlalchemy.sql import func
 from app.core.database import Base
 from sqlalchemy.orm import relationship
@@ -16,6 +16,7 @@ class FileRecord(Base):
     columns = Column(String, nullable=False)  # store as comma-separated
     record_count = Column(Integer, nullable=False)
     file_hash = Column(String, nullable=False, unique=True)  # ✅ for deduplication
+    is_sample = Column(Boolean, default=False, nullable=False)
 
     # Preprocessing results
     normalized_s3_key = Column(String, nullable=True)

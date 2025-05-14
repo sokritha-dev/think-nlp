@@ -31,6 +31,7 @@ def apply_lda_model(
         {
             "topic_id": str(i),
             "keywords": ", ".join([word for word, _ in lda_model.show_topic(i)]),
+            "label": f"topic_{i}",
         }
         for i in range(num_topics)
     ]
