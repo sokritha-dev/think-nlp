@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     PGADMIN_DEFAULT_EMAIL: str | None = None
     PGADMIN_DEFAULT_PASSWORD: str | None = None
 
-    SAMPLE_FILE_ID: str
+    MAX_SIZE_FILE_UPLOAD: int
 
     class Config:
         # Dynamically choose the env file

@@ -59,7 +59,7 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
         existing_topic_model = (
             db.query(TopicModel)
             .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.updated_at.desc())
+            .order_by(TopicModel.label_updated_at.desc())
             .first()
         )
         if existing_topic_model:
@@ -151,12 +151,9 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
         db.commit()
 
         eda = EDA(df=df, file_id=file_id)
-        image_urls = eda.run_eda()
-        record.eda_wordcloud_url = image_urls.get("word_cloud")
-        record.eda_text_length_url = image_urls.get("length_distribution")
-        record.eda_word_freq_url = image_urls.get("common_words")
-        record.eda_bigram_url = image_urls.get("2gram")
-        record.eda_trigram_url = image_urls.get("3gram")
+        eda_result = eda.run_eda()
+
+        record.eda_analysis = json.dumps(eda_result)
         record.eda_updated_at = datetime.now()
         db.commit()
 
@@ -173,7 +170,7 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
             s3_key=lda_key,
             s3_url=lda_url,
             summary_json=json.dumps(topic_summary),
-            updated_at=datetime.now(),
+            topic_updated_at=datetime.now(),
         )
         db.add(lda_entry)
         db.commit()
@@ -186,6 +183,9 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
             tid = int(topic["topic_id"])
             topic["label"] = label_map.get(tid)
             topic.setdefault("keywords", [])
+
+        lda_entry.label_updated_at = datetime.now()
+        db.commit()
 
         df["text"] = df["lemmatized_tokens"].apply(
             lambda x: " ".join(x) if isinstance(x, list) else " ".join(eval(x))
@@ -268,7 +268,7 @@ def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
         topic_model = (
             db.query(TopicModel)
             .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.updated_at.desc())
+            .order_by(TopicModel.label_updated_at.desc())
             .first()
         )
         if not topic_model:

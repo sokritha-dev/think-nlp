@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, UploadFile, File, Depends
 from uuid import uuid4
-from io import StringIO, BytesIO
+from io import StringIO
 import pandas as pd
 from sqlalchemy.orm import Session
 import logging
@@ -12,7 +12,6 @@ from app.schemas.upload import UploadData, UploadResponse
 from app.services.hashing import compute_sha256
 from app.services.s3_uploader import (
     upload_compressed_csv_to_s3,
-    upload_file_to_s3,
     delete_file_from_s3,
 )
 from app.core.database import get_db
@@ -26,6 +25,8 @@ from app.messages.upload_messages import (
     MISSING_REVIEW_COLUMN,
     UPLOAD_FAILED,
 )
+from app.core.config import settings
+
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 logger = logging.getLogger(__name__)
@@ -42,6 +43,14 @@ async def upload_csv(
     s3_key = None
 
     try:
+        # Check Size File
+        MAX_SIZE = settings.MAX_SIZE_FILE_UPLOAD * 1024 * 1024  # 5MB
+        if len(contents) > MAX_SIZE:
+            raise BadRequestError(
+                code="FILE_TOO_LARGE",
+                message="File size exceeds 5MB limit. Please upload a smaller file.",
+            )
+
         # Decode CSV
         decoded = contents.decode("utf-8")
         try:
@@ -73,10 +82,6 @@ async def upload_csv(
                     record_count=existing.record_count,
                 ),
             )
-
-        # Step 2: Upload to S3
-        # s3_key = f"user-data/{uuid4()}.csv"
-        # s3_url = upload_file_to_s3(BytesIO(contents), s3_key, content_type="text/csv")
 
         s3_key = f"user-data/{uuid4()}.csv.gz"
         s3_url = upload_compressed_csv_to_s3(contents, s3_key)

@@ -1,5 +1,6 @@
 from datetime import datetime
 import gzip
+import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 import pandas as pd
@@ -29,6 +30,7 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
     try:
         file_id = req.file_id
         record = db.query(FileRecord).filter_by(id=file_id).first()
+
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND_FOR_EDA)
 
@@ -37,6 +39,22 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
 
+        print(f"lemmatized updated at::: {record.lemmatized_updated_at}")
+        print(f"eda_updated_at::: {record.eda_updated_at}")
+        print(f"hello::: {record.lemmatized_updated_at < record.eda_updated_at}")
+
+        if record.lemmatized_updated_at < record.eda_updated_at:
+            eda_result = json.loads(record.eda_analysis)
+
+            return success_response(
+                message=EDA_GENERATION_SUCCESS,
+                data={
+                    "file_id": file_id,
+                    **eda_result,
+                },
+            )
+
+        print("why it possible....")
         # Step 1: Download and decompress
         file_bytes = download_file_from_s3(record.lemmatized_s3_key)
         if record.lemmatized_s3_key.endswith(".gz"):
@@ -50,6 +68,7 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
         eda_result = eda.run_eda()  # returns dict of lists
 
         # Step 3: Optional metadata (for audit/update tracking)
+        record.eda_analysis = json.dumps(eda_result)
         record.eda_updated_at = datetime.now()
         db.commit()
 

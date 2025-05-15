@@ -58,7 +58,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         if (
             existing
             and record.lemmatized_updated_at
-            and existing.updated_at >= record.lemmatized_updated_at
+            and existing.topic_updated_at >= record.lemmatized_updated_at
             and req.num_topics == existing.topic_count
         ):
             logger.info("⏩ Skipping LDA - result already up-to-date.")
@@ -112,7 +112,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             existing.s3_url = s3_url
             existing.topic_count = num_topics
             existing.summary_json = json.dumps(topic_summary)
-            existing.updated_at = datetime.now()
+            existing.topic_updated_at = datetime.now()
             db.commit()
         else:
             new_entry = TopicModel(
@@ -123,7 +123,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 s3_key=new_s3_key,
                 s3_url=s3_url,
                 summary_json=json.dumps(topic_summary),
-                updated_at=datetime.now(),
+                topic_updated_at=datetime.now(),
             )
             db.add(new_entry)
             db.commit()
@@ -162,7 +162,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         prev_label_map = json.loads(topic_model.label_map_json or "{}")
 
         if (
-            all("label" in t for t in topic_summary)
+            topic_model.topic_updated_at < topic_model.label_updated_at
             and req.keywords == (prev_keywords or None)
             and (req.label_map or {}) == prev_label_map
         ):
@@ -239,6 +239,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         topic_model.summary_json = json.dumps(topic_summary)
         topic_model.label_keywords = json.dumps(req.keywords or [])
         topic_model.label_map_json = json.dumps(req.label_map or {})
+        topic_model.label_updated_at = datetime.now()
         db.commit()
 
         return success_response(
@@ -272,8 +273,6 @@ async def get_existing_topic_labels(
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
-
-        print(f"summary json::: {topic_model.summary_json}")
 
         topic_summary = json.loads(topic_model.summary_json)
 

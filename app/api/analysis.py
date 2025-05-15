@@ -62,11 +62,7 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             .order_by(SentimentAnalysis.updated_at.desc())
             .first()
         )
-        if (
-            existing
-            and topic_model.updated_at
-            and existing.updated_at >= topic_model.updated_at
-        ):
+        if existing and existing.updated_at >= topic_model.label_updated_at:
             summary_result = SentimentChartData(
                 overall={
                     "positive": existing.overall_positive,
@@ -157,8 +153,10 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
         return success_response(message=SENTIMENT_ANALYSIS_SUCCESS, data=summary_result)
 
     except NotFoundError as e:
+        logger.exception(f"Sentiment analysis failed: {e}")
         raise e
     except ServerError as e:
+        logger.exception(f"Sentiment analysis failed: {e}")
         raise e
     except Exception as e:
         logger.exception(f"Sentiment analysis failed: {e}")
@@ -193,7 +191,7 @@ async def get_sentiment_result(
                 message="Sentiment Analysis not found.",
             )
 
-        should_recompute = topic_model.updated_at > existing.updated_at
+        should_recompute = topic_model.label_updated_at > existing.updated_at
         summary_result = SentimentChartData(
             overall={
                 "positive": existing.overall_positive,
