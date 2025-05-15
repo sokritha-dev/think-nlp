@@ -6,7 +6,7 @@ import sqlalchemy
 from app.core.database import database
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import analysis, clean, eda, pipeline, topic_modeling, upload
+from app.api import analysis, clean, eda, file, pipeline, topic_modeling, upload
 import logging
 
 from app.utils.exception_handlers import (
@@ -74,6 +74,7 @@ app.include_router(eda.router)
 app.include_router(topic_modeling.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
+app.include_router(file.router)
 
 
 @app.get("/health")
