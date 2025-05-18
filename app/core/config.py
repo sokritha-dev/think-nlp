@@ -1,10 +1,13 @@
 # app/core/config.py
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+from pathlib import Path
 
 
 class Settings(BaseSettings):
+    ENV: str = "local"
+
     AWS_ACCESS_KEY_ID: str | None = None
     AWS_SECRET_ACCESS_KEY: str | None = None
     AWS_S3_BUCKET_NAME: str | None = None
@@ -21,10 +24,10 @@ class Settings(BaseSettings):
 
     MAX_SIZE_FILE_UPLOAD: int
 
-    class Config:
-        # Dynamically choose the env file
-        env_file = f".env.{os.getenv('ENV', 'local')}"  # default to .env.local
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=Path(f".env.{os.environ.get('ENV', 'local')}"),
+        env_file_encoding="utf-8",
+    )
 
 
 settings = Settings()

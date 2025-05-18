@@ -2,7 +2,7 @@
 
 # ▶ Run the dev server
 dev:
-	ENV=local uvicorn app.main:app --reload
+	ENV=development uvicorn app.main:app --reload
 
 # 🧹 Lint with ruff (fast Python linter)
 lint:
