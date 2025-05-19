@@ -1,10 +1,14 @@
-venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.env*
 *.sqlite3
 *.db
+*.log
+.mypy_cache/
+.pytest_cache/
+venv/
+.idea/
+.vscode/
 reports/
-scripts/
-.env.local
