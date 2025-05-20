@@ -58,9 +58,7 @@ jobs:
     - name: Rebuild .env.production from secrets
       run: |
         cat <<EOF > .env.production
-        
         ENV=${{ secrets.ENV }}
-
         SERVICE_NAME=${{ secrets.SERVICE_NAME }}
         DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
         DROPLET_USER=${{ secrets.DROPLET_USER }}
@@ -82,6 +80,7 @@ jobs:
 
         MAX_SIZE_FILE_UPLOAD=${{ secrets.ENV_MAX_SIZE_FILE_UPLOAD }}
         EOF
+
 
     - name: Copy docker-compose, Makefile, and env file to Droplet
       env:
