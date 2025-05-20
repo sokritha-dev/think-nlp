@@ -33,12 +33,16 @@ jobs:
         docker push $IMAGE_NAME:latest
         docker push $IMAGE_NAME:${{ env.IMAGE_TAG }}
 
-    - name: Tag the commit in Git
+    - name: Conditionally tag the commit
       run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "actions@github.com"
-        git tag -a image-${{ env.IMAGE_TAG }} -m "Image built on ${{ env.IMAGE_TAG }}"
-        git push origin image-${{ env.IMAGE_TAG }}
+        if git ls-remote --tags origin | grep -q "refs/tags/image-${{ env.IMAGE_TAG }}"; then
+          echo "✅ Tag already exists. Skipping tag push."
+        else
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git tag -a image-${{ env.IMAGE_TAG }} -m "Image built on ${{ env.IMAGE_TAG }}"
+          git push origin image-${{ env.IMAGE_TAG }}
+        fi
 
     - name: Create GitHub release (optional)
       uses: softprops/action-gh-release@v1
