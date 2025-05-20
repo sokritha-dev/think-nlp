@@ -8,6 +8,11 @@ from pathlib import Path
 class Settings(BaseSettings):
     ENV: str = "local"
 
+    SERVICE_NAME: str | None = None
+    DOCKERHUB_USERNAME: str | None = None
+    DROPLET_USER: str | None = None
+    DROPLET_HOST: str | None = None
+
     AWS_ACCESS_KEY_ID: str | None = None
     AWS_SECRET_ACCESS_KEY: str | None = None
     AWS_S3_BUCKET_NAME: str | None = None

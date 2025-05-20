@@ -1,74 +1,105 @@
 # ============================
-# 🌐 ENVIRONMENT VARIABLES
+# 🌍 Active Environment
 # ============================
-
 ENV ?= local
-SERVICE_NAME ?= app  # Docker Compose service name (use "app" for prod, "app-dev" for dev)
+ENV_FILE := .env.$(ENV)
+
+# Load ENV-specific values if the file exists
+ifneq (,$(wildcard $(ENV_FILE)))
+  include $(ENV_FILE)
+  export
+endif
+
+SERVICE_NAME ?= app
+APP_IMAGE ?= $(DOCKERHUB_USERNAME)/think-nlp-app
+TAG ?= latest
 
 # ============================
-# 🚀 APP COMMANDS
+# Debugging
+# ============================
+debug:
+	@echo "ENV: $(ENV)"
+	@echo "DOCKERHUB_USERNAME: $(DOCKERHUB_USERNAME)"
+	@echo "APP_IMAGE: $(APP_IMAGE)"
+	@echo "DROPLET_HOST: $(DROPLET_HOST)"
+
+
+# ============================
+# 🚀 DEPLOYMENT
+# ============================
+
+# ▶ Deploy a specific image tag to the Droplet
+deploy:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "docker pull $(APP_IMAGE):$(TAG) && docker compose -f docker-compose.production.yml up -d"
+
+# ▶ Rollback to a specific image tag manually
+rollback:
+ifndef TAG
+	$(error ❌ Please provide a rollback TAG like TAG=2024-05-12)
+endif
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "./rollback.sh $(TAG)"
+
+# ▶ Fuzzy-select rollback tag using fzf
+rollback-select:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "./rollback.sh"
+
+# ▶ View currently deployed tag
+deployed-tag:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "docker ps --filter name=$(SERVICE_NAME) --format '{{.Image}}'"
+
+# ============================
+# 🚀 APP COMMANDS (LOCAL DEV)
 # ============================
 
 # ▶ Local dev without Docker
 dev:
 	ENV=development uvicorn app.main:app --reload
 
-# ▶ Start app in development mode (Docker)
+# ▶ Start dev/prod with Docker Compose
 up-dev:
-	docker compose -f docker-compose.dev.yml up -d --build
-	@echo "🧪 NLP App running in development mode."
+	docker compose -f docker-compose.development.yml up -d --build
 
-# ▶ Start app in production mode (Docker)
+up-local:
+	docker compose -f docker-compose.local.yml up -d --build
+
 up-prod:
-	docker compose -f docker-compose.yml up -d --build
-	@echo "🚀 NLP App running in production mode."
+	docker compose -f docker-compose.production.yml up -d --build
 
 # ▶ Stop dev/prod
 down-dev:
-	docker compose -f docker-compose.dev.yml down
-	@echo "🛑 Dev environment stopped."
+	docker compose -f docker-compose.development.yml down
+
+down-local:
+	docker compose -f docker-compose.local.yml down
 
 down-prod:
-	docker compose -f docker-compose.yml down
-	@echo "🛑 Production environment stopped."
+	docker compose -f docker-compose.production.yml down
 
 # ▶ View logs
-logs-dev:
-	docker compose -f docker-compose.dev.yml logs -f app
+logs-local:
+	docker compose -f docker-compose.local.yml logs -f app
 
 logs-prod:
-	docker compose -f docker-compose.yml logs -f app
-
-# ▶ Build images manually
-build-prod:
-	docker compose -f docker-compose.yml build
-
-build-dev:
-	docker compose -f docker-compose.dev.yml build
+	docker compose -f docker-compose.production.yml logs -f app
 
 # ▶ Reset all volumes
 reset-all:
 	docker compose -f docker-compose.yml down -v
 	docker compose -f docker-compose.dev.yml down -v
-	@echo "🧨 Reset all volumes and containers!"
 
 # ============================
 # ⚙️ CODE QUALITY
 # ============================
 
-# 🧹 Lint with ruff
 lint:
 	ruff app tests
 
-# 🎨 Auto-format with black
 format:
 	black app tests
 
-# 🧪 Check formatting only
 format-check:
 	black --check app tests
 
-# 🔥 Clean Python cache
 clean:
 	find . -type d -name __pycache__ -exec rm -r {} +
 
@@ -83,7 +114,7 @@ test-html:
 	ENV=local PYTHONPATH=. pytest --cov=app app/tests/ --cov-report=html
 
 # ============================
-# 📈 LOAD TESTING (Locust)
+# 📈 LOAD TESTING
 # ============================
 
 load-test:
@@ -104,7 +135,7 @@ view-report:
 	python -m http.server 5500
 
 # ============================
-# 🐘 POSTGRES & ALEMBICd
+# 🐘 POSTGRES & ALEMBIC
 # ============================
 
 init-alembic:
@@ -137,25 +168,22 @@ pgadmin:
 
 help:
 	@echo ""
-	@echo "🔧 Docker:"
-	@echo "  make up-dev           Start development server"
-	@echo "  make up-prod          Start production server"
-	@echo "  make down-dev         Stop development server"
-	@echo "  make down-prod        Stop production server"
-	@echo "  make reset-all        Remove all containers and volumes"
+	@echo "🔧 Docker Deployment:"
+	@echo "  make deploy TAG=2024-05-19 DROPLET_HOST=ip ..."
+	@echo "  make rollback TAG=2024-05-12"
+	@echo "  make rollback-select         # Uses fuzzy select"
 	@echo ""
-	@echo "🧪 Testing:"
-	@echo "  make test             Run unit tests with coverage"
-	@echo "  make test-html        Generate HTML test report"
-	@echo "  make load-test        Run Locust performance test"
+	@echo "🚀 App Dev/Prod Commands:"
+	@echo "  make up-dev / down-dev / logs-dev"
+	@echo "  make up-prod / down-prod / logs-prod"
 	@echo ""
-	@echo "🎨 Quality:"
-	@echo "  make lint             Lint code with ruff"
-	@echo "  make format           Auto-format code with black"
-	@echo "  make clean            Delete __pycache__ folders"
+	@echo "🧪 Testing & Load Test:"
+	@echo "  make test / test-html / load-test"
 	@echo ""
-	@echo "🗄️  Database:"
-	@echo "  make migrate          Apply latest Alembic migration"
-	@echo "  make downgrade        Revert one migration"
-	@echo "  make revision m=\"msg\"  Create a migration revision"
+	@echo "🎨 Code Quality:"
+	@echo "  make lint / format / clean"
 	@echo ""
+	@echo "🗄️ Database Migrations (Alembic):"
+	@echo "  make migrate / downgrade / current / history"
+	@echo ""
+	@echo "ℹ️ All targets are overrideable with variables like TAG, DOCKERHUB_USERNAME, etc."
