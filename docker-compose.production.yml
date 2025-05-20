@@ -25,7 +25,7 @@ services:
       - nlp-net
 
   app:
-    build: .
+    image: sokritha7/think-nlp-app:latest
     container_name: nlp-app
     restart: unless-stopped
     env_file:

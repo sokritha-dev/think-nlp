@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DOCKERHUB_USERNAME: str | None = None
     DROPLET_USER: str | None = None
     DROPLET_HOST: str | None = None
+    APP_IMAGE: str | None = None
 
     AWS_ACCESS_KEY_ID: str | None = None
     AWS_SECRET_ACCESS_KEY: str | None = None

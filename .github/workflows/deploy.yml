@@ -81,6 +81,8 @@ jobs:
         MAX_SIZE_FILE_UPLOAD=${{ secrets.MAX_SIZE_FILE_UPLOAD }}
         EOF
 
+        echo "APP_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }}" >> .env.production
+
 
     - name: Copy docker-compose, Makefile, and env file to Droplet
       env:
