@@ -7,7 +7,7 @@ nltk.download("vader_lexicon")
 
 vader = SentimentIntensityAnalyzer()
 bert_pipeline = pipeline(
-    "sentiment-analysis", model="nlptown/bert-base-multilingual-uncased-sentiment"
+    "sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english"
 )
 
 

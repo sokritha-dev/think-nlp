@@ -1,5 +1,0 @@
-
-services:
-  app:
-    volumes:
-      - .:/app  # Mount your local code
