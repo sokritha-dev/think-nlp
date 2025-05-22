@@ -3,7 +3,7 @@
 from datetime import datetime
 import gzip
 import json
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 import pandas as pd
 from uuid import uuid4
@@ -38,8 +38,6 @@ from app.utils.exceptions import NotFoundError, ServerError
 from app.messages.pipeline_messages import (
     FILE_NOT_FOUND,
     SAMPLE_FILE_NOT_FOUND,
-    TOPIC_MODEL_NOT_FOUND,
-    SENTIMENT_RESULT_NOT_FOUND,
     FULL_PIPELINE_SUCCESS,
     SAMPLE_DATA_URL_SUCCESS,
 )
@@ -48,10 +46,8 @@ router = APIRouter(prefix="/api/pipeline", tags=["Full Pipeline"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("/sentiment-analysis")
-def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
+def run_sentiment_pipeline(file_id: str, db: Session):
     try:
-        file_id = req.file_id
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
@@ -243,10 +239,33 @@ def run_full_pipeline(req: FullPipelineRequest, db: Session = Depends(get_db)):
         return success_response(
             message=FULL_PIPELINE_SUCCESS,
             data={
+                "status": "done",
                 "overall": overall,
                 "per_topic": [t.model_dump() for t in per_topic],
             },
         )
+
+    except Exception as e:
+        logger.exception(f"❌ Full pipeline failed in background: {e}")
+
+
+@router.post("/sentiment-analysis")
+def run_full_pipeline(
+    req: FullPipelineRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    try:
+        # ✅ Enqueue background task
+        background_tasks.add_task(run_sentiment_pipeline, req.file_id, db)
+
+        return {
+            "message": "✅ Pipeline started in background.",
+            "data": {
+                "file_id": req.file_id,
+                "status": "processing",
+            },
+        }
 
     except NotFoundError as e:
         raise e
@@ -271,21 +290,24 @@ def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
             .order_by(TopicModel.label_updated_at.desc())
             .first()
         )
-        if not topic_model:
-            raise NotFoundError(
-                code="TOPIC_MODEL_NOT_FOUND",
-                message=TOPIC_MODEL_NOT_FOUND,
+
+        sentiment = None
+        if topic_model:
+            sentiment = (
+                db.query(SentimentAnalysis)
+                .filter_by(topic_model_id=topic_model.id, method="vader")
+                .order_by(SentimentAnalysis.updated_at.desc())
+                .first()
             )
 
-        sentiment = (
-            db.query(SentimentAnalysis)
-            .filter_by(topic_model_id=topic_model.id, method="vader")
-            .order_by(SentimentAnalysis.updated_at.desc())
-            .first()
-        )
-        if not sentiment:
-            raise NotFoundError(
-                code="SENTIMENT_RESULT_NOT_FOUND", message=SENTIMENT_RESULT_NOT_FOUND
+        # If neither is present, it's still processing
+        if not topic_model or not sentiment:
+            return success_response(
+                message="Sentiment analysis still processing.",
+                data={
+                    "file_id": file_id,
+                    "status": "processing",
+                },
             )
 
         per_topic = [
@@ -297,6 +319,7 @@ def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
             message="Sentiment analysis result loaded successfully.",
             data={
                 "file_id": file_id,
+                "status": "done",
                 "overall": {
                     "positive": sentiment.overall_positive,
                     "neutral": sentiment.overall_neutral,

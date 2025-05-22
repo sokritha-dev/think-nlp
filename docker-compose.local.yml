@@ -30,6 +30,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env.local
+    volumes:
+      - .:/app  # Mount your local code for live editing
     ports:
       - "8000:8000"
     depends_on:
