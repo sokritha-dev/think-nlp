@@ -41,6 +41,8 @@ from app.messages.pipeline_messages import (
     FULL_PIPELINE_SUCCESS,
     SAMPLE_DATA_URL_SUCCESS,
 )
+from app.core.config import settings
+
 
 router = APIRouter(prefix="/api/pipeline", tags=["Full Pipeline"])
 logger = logging.getLogger(__name__)
@@ -343,7 +345,7 @@ def get_sample_data_url(file_id: str = Query(...)):
     try:
         s3_key = f"user-data/{file_id}.csv.gz"
         s3_url = generate_presigned_url(
-            bucket="nlp-learner",
+            bucket=settings.AWS_S3_BUCKET_NAME,
             key=s3_key,
         )
         return success_response(
