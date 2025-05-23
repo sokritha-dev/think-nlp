@@ -3,7 +3,7 @@ services:
     image: postgres:15
     restart: unless-stopped
     env_file:
-      - .env.local
+      - .env.production
     ports:
       - "5432:5432"
     volumes:
@@ -16,7 +16,7 @@ services:
     container_name: pgadmin
     restart: unless-stopped
     env_file:
-      - .env.local
+      - .env.production
     ports:
       - "5050:80"
     volumes:
@@ -25,22 +25,17 @@ services:
       - nlp-net
 
   app:
-    build: .
+    image: ${APP_IMAGE}
     container_name: nlp-app
     restart: unless-stopped
     env_file:
-      - .env.local
+      - .env.production
     ports:
       - "8000:8000"
     depends_on:
       - postgres
     networks:
       - nlp-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
 
 volumes:
   pgdata:

@@ -1,35 +1,122 @@
-# Makefile
+# ============================
+# 🌍 Active Environment
+# ============================
+ENV ?= local
+ENV_FILE := .env.$(ENV)
 
-# ▶ Run the dev server
+# Load ENV-specific values if the file exists
+ifneq (,$(wildcard $(ENV_FILE)))
+  include $(ENV_FILE)
+  export
+endif
+
+SERVICE_NAME ?= app
+APP_IMAGE ?= $(DOCKERHUB_USERNAME)/think-nlp-app
+TAG ?= latest
+
+# ============================
+# Debugging
+# ============================
+debug:
+	@echo "ENV: $(ENV)"
+	@echo "DOCKERHUB_USERNAME: $(DOCKERHUB_USERNAME)"
+	@echo "APP_IMAGE: $(APP_IMAGE)"
+	@echo "DROPLET_HOST: $(DROPLET_HOST)"
+
+
+# ============================
+# 🚀 DEPLOYMENT
+# ============================
+
+# ▶ Deploy a specific image tag to the Droplet
+deploy:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "docker pull $(APP_IMAGE):$(TAG) && docker compose -f docker-compose.production.yml up -d"
+
+# ▶ Rollback to a specific image tag manually
+rollback:
+ifndef TAG
+	$(error ❌ Please provide a rollback TAG like TAG=2024-05-12)
+endif
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "./rollback.sh $(TAG)"
+
+# ▶ Fuzzy-select rollback tag using fzf
+rollback-select:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "./rollback.sh"
+
+# ▶ View currently deployed tag
+deployed-tag:
+	ssh $(DROPLET_USER)@$(DROPLET_HOST) "docker ps --filter name=$(SERVICE_NAME) --format '{{.Image}}'"
+
+# ============================
+# 🚀 APP COMMANDS (LOCAL DEV)
+# ============================
+
+# ▶ Local dev without Docker
 dev:
-	ENV=local uvicorn app.main:app --reload
+	ENV=development uvicorn app.main:app --reload
 
-# 🧹 Lint with ruff (fast Python linter)
+# ▶ Start dev/prod with Docker Compose
+up-dev:
+	docker compose -f docker-compose.development.yml up -d --build
+
+up-local:
+	docker compose -f docker-compose.local.yml up -d --build
+
+up-prod:
+	docker compose -f docker-compose.production.yml up -d --build
+
+# ▶ Stop dev/prod
+down-dev:
+	docker compose -f docker-compose.development.yml down
+
+down-local:
+	docker compose -f docker-compose.local.yml down
+
+down-prod:
+	docker compose -f docker-compose.production.yml down
+
+# ▶ View logs
+logs-local:
+	docker compose -f docker-compose.local.yml logs -f app
+
+logs-prod:
+	docker compose -f docker-compose.production.yml logs -f app
+
+# ▶ Reset all volumes
+reset-all:
+	docker compose -f docker-compose.yml down -v
+	docker compose -f docker-compose.dev.yml down -v
+
+# ============================
+# ⚙️ CODE QUALITY
+# ============================
+
 lint:
 	ruff app tests
 
-# 🎨 Auto-format code with black
 format:
 	black app tests
 
-# 🧪 Check formatting issues only (dry run)
 format-check:
 	black --check app tests
 
-# 🔥 Clean up pycache
 clean:
 	find . -type d -name __pycache__ -exec rm -r {} +
 
+# ============================
+# 🧪 TESTING
+# ============================
 
-# 🧪 Run tests with coverage
 test:
-	ENV=local @PYTHONPATH=. pytest --cov=app app/tests/ --cov-report=term-missing
+	ENV=local PYTHONPATH=. pytest --cov=app app/tests/ --cov-report=term-missing
 
-# 🧪 Run tests with HTML report
 test-html:
-	ENV=local @PYTHONPATH=. pytest --cov=app app/tests/ --cov-report=html
+	ENV=local PYTHONPATH=. pytest --cov=app app/tests/ --cov-report=html
 
-# 🧪 Run LOAD tests with proper HTML report
+# ============================
+# 📈 LOAD TESTING
+# ============================
+
 load-test:
 	@echo "Running Locust load test with CSV report..."
 	@mkdir -p reports
@@ -40,89 +127,63 @@ load-test:
 		--run-time 2m \
 		--host http://localhost:8000 \
 		--csv reports/upload_test
-		
+
 render-report:
 	python scripts/render_report.py reports/upload_test_stats.csv
 
 view-report:
 	python -m http.server 5500
 
+# ============================
+# 🐘 POSTGRES & ALEMBIC
+# ============================
 
-# ----------------------------
-# 🐳 Docker Database Commands
-# ----------------------------
-up:
-	docker-compose --env-file .env.local up -d --build
-	@echo "✅ PostgreSQL is up and running."
-
-down:
-	docker-compose down
-	@echo "🛑 PostgreSQL stopped."
-
-restart:
-	docker-compose down
-	docker-compose up -d --build
-	@echo "🔁 PostgreSQL restarted."
-
-logs:
-	docker-compose logs -f postgres
-
-ps:
-	docker-compose ps
-
-reset-db:
-	docker-compose down -v
-	docker-compose up -d
-	@echo "🚨 PostgreSQL reset (all data wiped!)"
-
-pgadmin:
-	open http://localhost:5050
-
-
-# Environment configuration
-ENV ?= local
-SERVICE_NAME ?= app  # Change this if your Docker service is named differently
-
-# Alembic: Initialize migrations directory
 init-alembic:
 	docker compose exec $(SERVICE_NAME) alembic init migrations
 
-# Alembic: Create new revision (requires message m="...")
 revision:
 ifndef m
 	$(error ❌ Please provide a message with m="your message")
 endif
 	docker compose exec $(SERVICE_NAME) alembic revision --autogenerate -m "$(m)"
 
-# Alembic: Apply latest migration
 migrate:
 	docker compose exec $(SERVICE_NAME) alembic upgrade head
 
-# Alembic: Downgrade one revision
 downgrade:
 	docker compose exec $(SERVICE_NAME) alembic downgrade -1
 
-# Alembic: Check current DB version
 current:
 	docker compose exec $(SERVICE_NAME) alembic current
 
-# Alembic: Show migration history
 history:
 	docker compose exec $(SERVICE_NAME) alembic history
 
-# Show help
+pgadmin:
+	open http://localhost:5050
+
+# ============================
+# 📚 HELP
+# ============================
+
 help:
 	@echo ""
-	@echo "Available commands:"
-	@echo "  make init-alembic         Initialize Alembic in your project"
-	@echo "  make revision m=\"msg\"     Create a migration with message"
-	@echo "  make migrate              Upgrade DB to latest revision"
-	@echo "  make downgrade            Downgrade one revision"
-	@echo "  make current              Show current DB version"
-	@echo "  make history              Show migration history"
+	@echo "🔧 Docker Deployment:"
+	@echo "  make deploy TAG=2024-05-19 DROPLET_HOST=ip ..."
+	@echo "  make rollback TAG=2024-05-12"
+	@echo "  make rollback-select         # Uses fuzzy select"
 	@echo ""
-
-
-
-
-
+	@echo "🚀 App Dev/Prod Commands:"
+	@echo "  make up-dev / down-dev / logs-dev"
+	@echo "  make up-prod / down-prod / logs-prod"
+	@echo ""
+	@echo "🧪 Testing & Load Test:"
+	@echo "  make test / test-html / load-test"
+	@echo ""
+	@echo "🎨 Code Quality:"
+	@echo "  make lint / format / clean"
+	@echo ""
+	@echo "🗄️ Database Migrations (Alembic):"
+	@echo "  make migrate / downgrade / current / history"
+	@echo ""
+	@echo "ℹ️ All targets are overrideable with variables like TAG, DOCKERHUB_USERNAME, etc."

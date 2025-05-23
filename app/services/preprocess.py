@@ -12,7 +12,7 @@ from nltk.corpus import wordnet
 
 
 # Download necessary resources once
-nltk.download("averaged_perceptron_tagger")
+nltk.download("averaged_perceptron_tagger_eng")
 nltk.download("stopwords")
 nltk.download("wordnet")
 
