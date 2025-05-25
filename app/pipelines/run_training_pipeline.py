@@ -4,11 +4,6 @@ import subprocess
 import time
 import json
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
 # Load config.yaml
 with open("app/pipelines/configs/training_config.yaml", "r") as file:
     config = yaml.safe_load(file)

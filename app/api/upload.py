@@ -27,7 +27,6 @@ from app.middlewares.security import limiter
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 @router.post("/", response_model=UploadResponse)
