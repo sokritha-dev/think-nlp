@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     FRONTEND_ORIGIN: str | None = None
     BETTERSTACK_API_KEY: str | None = None
+    BETTERSTACK_HOST: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=Path(f".env.{os.environ.get('ENV', 'local')}"),
