@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     MAX_SIZE_FILE_UPLOAD: int
 
+    FRONTEND_ORIGIN: str | None = None
+    BETTERSTACK_API_KEY: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=Path(f".env.{os.environ.get('ENV', 'local')}"),
         env_file_encoding="utf-8",

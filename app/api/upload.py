@@ -1,6 +1,6 @@
 # app/api/upload.py
 
-from fastapi import APIRouter, UploadFile, File, Depends
+from fastapi import APIRouter, Request, UploadFile, File, Depends
 from uuid import uuid4
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -22,6 +22,7 @@ from app.messages.upload_messages import (
     DUPLICATE_FILE_FOUND,
     UPLOAD_FAILED,
 )
+from app.middlewares.security import limiter
 
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
@@ -30,7 +31,9 @@ logging.basicConfig(level=logging.INFO)
 
 
 @router.post("/", response_model=UploadResponse)
+@limiter.limit("5/hour")
 async def upload_csv(
+    request: Request,
     file: UploadFile = File(...),
     validated: tuple[bytes, pd.DataFrame] = Depends(validate_csv(["review"])),
     db: Session = Depends(get_db),

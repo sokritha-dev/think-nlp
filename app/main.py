@@ -1,17 +1,24 @@
 from contextlib import asynccontextmanager
 import time
 from fastapi import FastAPI, Response
-from fastapi.middleware.cors import CORSMiddleware
 import sqlalchemy
 from app.core.database import database
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from slowapi.errors import RateLimitExceeded
 
 from app.api import analysis, clean, eda, file, pipeline, topic_modeling, upload
 import logging
 
+from app.middlewares.logging import setup_logging
+from app.middlewares.security import (
+    SecurityHeadersMiddleware,
+    add_cors_middleware,
+    add_rate_limit,
+)
 from app.utils.exception_handlers import (
     generic_exception_handler,
     http_exception_handler,
+    rate_limit_exceeded_handler,
 )
 
 logging.basicConfig(
@@ -57,17 +64,18 @@ app = FastAPI(
 )
 
 
-# Allow CORS (for frontend)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ===============
+# Securities
+# ===============
+setup_logging()
+add_cors_middleware(app)
+add_rate_limit(app)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
-# Register routes
+# =================
+# API Endpoints
+# =================
 app.include_router(upload.router)
 app.include_router(clean.router)
 app.include_router(eda.router)
@@ -77,6 +85,9 @@ app.include_router(pipeline.router)
 app.include_router(file.router)
 
 
+# =================
+# Health Checks
+# =================
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -96,5 +107,9 @@ def readiness():
         return Response(status_code=503)
 
 
+# =================
+# Global Error Handler
+# =================
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)

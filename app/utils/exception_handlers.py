@@ -1,6 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from slowapi.errors import RateLimitExceeded
 import traceback
 import uuid
 
@@ -37,4 +38,16 @@ async def generic_exception_handler(request: Request, exc: Exception):
                 "message": f"Internal server error. Reference ID: {error_id}",
             }
         },
+    )
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Too Many Requests",
+            "message": "You have exceeded the allowed number of requests. Please try again later.",
+            "retry_after": exc.detail.get("Retry-After", None),
+        },
+        headers={"Retry-After": str(exc.detail.get("Retry-After", 60))},
     )
