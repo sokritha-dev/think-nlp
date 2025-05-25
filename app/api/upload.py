@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, UploadFile, File, Depends
 from uuid import uuid4
-from io import StringIO
 import pandas as pd
 from sqlalchemy.orm import Session
 import logging
@@ -21,11 +20,8 @@ from app.utils.response_builder import success_response
 from app.messages.upload_messages import (
     UPLOAD_SUCCESS,
     DUPLICATE_FILE_FOUND,
-    INVALID_CSV_FORMAT,
-    MISSING_REVIEW_COLUMN,
     UPLOAD_FAILED,
 )
-from app.core.config import settings
 
 
 router = APIRouter(prefix="/api/upload", tags=["Upload"])
@@ -36,34 +32,14 @@ logging.basicConfig(level=logging.INFO)
 @router.post("/", response_model=UploadResponse)
 async def upload_csv(
     file: UploadFile = File(...),
-    contents: bytes = Depends(validate_csv),
+    validated: tuple[bytes, pd.DataFrame] = Depends(validate_csv(["review"])),
     db: Session = Depends(get_db),
 ):
     s3_uploaded = False
     s3_key = None
 
     try:
-        # Check Size File
-        MAX_SIZE = settings.MAX_SIZE_FILE_UPLOAD * 1024 * 1024  # 5MB
-        if len(contents) > MAX_SIZE:
-            raise BadRequestError(
-                code="FILE_TOO_LARGE",
-                message="File size exceeds 5MB limit. Please upload a smaller file.",
-            )
-
-        # Decode CSV
-        decoded = contents.decode("utf-8")
-        try:
-            df = pd.read_csv(StringIO(decoded))
-        except Exception as e:
-            raise BadRequestError(
-                code="INVALID_CSV_FORMAT", message=f"{INVALID_CSV_FORMAT}: {str(e)}"
-            )
-
-        if "review" not in df.columns:
-            raise BadRequestError(
-                code="MISSING_REVIEW_COLUMN", message=MISSING_REVIEW_COLUMN
-            )
+        contents, df = validated
 
         # Step 1: Hash and check deduplication
         file_hash = compute_sha256(contents)
