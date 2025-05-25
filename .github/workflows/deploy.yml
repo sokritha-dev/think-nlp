@@ -79,6 +79,9 @@ jobs:
         PGADMIN_DEFAULT_PASSWORD=${{ secrets.PGADMIN_DEFAULT_PASSWORD }}
 
         MAX_SIZE_FILE_UPLOAD=${{ secrets.MAX_SIZE_FILE_UPLOAD }}
+        
+        BETTERSTACK_API_KEY=${{ secrets.BETTERSTACK_API_KEY }}
+        FRONTEND_ORIGIN=${{ secrets.FRONTEND_ORIGIN }}
         EOF
 
         echo "APP_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }}" >> .env.production
