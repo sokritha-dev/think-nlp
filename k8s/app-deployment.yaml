@@ -62,6 +62,26 @@ spec:
                 secretKeyRef:
                   name: app-secret
                   key: AWS_S3_BUCKET_NAME
+            - name: MAX_SIZE_FILE_UPLOAD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: MAX_SIZE_FILE_UPLOAD
+            - name: BETTERSTACK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: BETTERSTACK_API_KEY
+            - name: BETTERSTACK_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: BETTERSTACK_HOST
+            - name: ENV
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: ENV
             - name: FRONTEND_ORIGIN
               valueFrom:
                 secretKeyRef:
