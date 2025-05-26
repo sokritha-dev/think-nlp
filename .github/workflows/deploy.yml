@@ -66,6 +66,10 @@ jobs:
             --from-literal=FRONTEND_ORIGIN=$FRONTEND_ORIGIN \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: 📥 Install cert-manager if needed
+        run: |
+          kubectl get ns cert-manager || kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.4/cert-manager.yaml
+
       - name: 🔍 Dry-run manifest validation
         run: kubectl apply --dry-run=client -f k8s/
 
