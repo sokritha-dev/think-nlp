@@ -5,8 +5,10 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     cert-manager.io/cluster-issuer: "letsencrypt-thinknlp-prod"
 spec:
+  ingressClassName: nginx  # ✅ Required to bind to nginx controller
   tls:
     - hosts:
         - api.thinknlp.xyz

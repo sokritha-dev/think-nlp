@@ -59,6 +59,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
+          MAX_SIZE_FILE_UPLOAD: ${{ secrets.MAX_SIZE_FILE_UPLOAD }}
+          BETTERSTACK_API_KEY: ${{ secrets.BETTERSTACK_API_KEY }}
+          BETTERSTACK_HOST: ${{ secrets.BETTERSTACK_HOST }}
           FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         run: |
           kubectl create secret generic app-secret \
@@ -66,6 +69,10 @@ jobs:
             --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
             --from-literal=AWS_REGION=$AWS_REGION \
             --from-literal=AWS_S3_BUCKET_NAME=$AWS_S3_BUCKET_NAME \
+            --from-literal=MAX_SIZE_FILE_UPLOAD=$MAX_SIZE_FILE_UPLOAD \
+            --from-literal=BETTERSTACK_API_KEY=$BETTERSTACK_API_KEY \
+            --from-literal=BETTERSTACK_HOST=$BETTERSTACK_HOST \
+
             --from-literal=FRONTEND_ORIGIN=$FRONTEND_ORIGIN \
             --dry-run=client -o yaml | kubectl apply -f -
 
