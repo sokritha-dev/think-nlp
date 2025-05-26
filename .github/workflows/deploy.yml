@@ -72,7 +72,6 @@ jobs:
             --from-literal=MAX_SIZE_FILE_UPLOAD=$MAX_SIZE_FILE_UPLOAD \
             --from-literal=BETTERSTACK_API_KEY=$BETTERSTACK_API_KEY \
             --from-literal=BETTERSTACK_HOST=$BETTERSTACK_HOST \
-
             --from-literal=FRONTEND_ORIGIN=$FRONTEND_ORIGIN \
             --dry-run=client -o yaml | kubectl apply -f -
 
