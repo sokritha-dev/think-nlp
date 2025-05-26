@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nlp-app
+  labels:
+    app: nlp-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nlp-app
+  template:
+    metadata:
+      labels:
+        app: nlp-app
+    spec:
+      containers:
+        - name: nlp-app
+          image: <DOCKERHUB_USERNAME>/think-nlp-app:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: supabase-secret
+                  key: POSTGRES_HOST
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: supabase-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: supabase-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: supabase-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_REGION
+            - name: AWS_S3_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_S3_BUCKET_NAME
+            - name: FRONTEND_ORIGIN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: FRONTEND_ORIGIN
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

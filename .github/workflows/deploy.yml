@@ -1,115 +1,107 @@
-name: 🚀 Build and Deploy Docker Image
+# .github/workflows/deploy.yml
+name: 🚀 Build and Deploy to DigitalOcean Kubernetes
 
 on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-
 jobs:
-  build-and-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
     env:
       IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: ✅ Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set image tag based on date
-      run: echo "IMAGE_TAG=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+      - name: ⏰ Set image tag based on date
+        run: echo "IMAGE_TAG=$(date +%Y-%m-%d)" >> $GITHUB_ENV
 
-    - name: Log in to Docker Hub
-      run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+      - name: 🔐 Docker login
+        run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
 
-    - name: Build and tag Docker image
-      run: |
-        docker build -t $IMAGE_NAME:latest \
-                     -t $IMAGE_NAME:${{ env.IMAGE_TAG }} .
+      - name: 📆 Build and push Docker image
+        run: |
+          docker build -t $IMAGE_NAME:latest -t $IMAGE_NAME:${{ env.IMAGE_TAG }} .
+          docker push $IMAGE_NAME:latest
+          docker push $IMAGE_NAME:${{ env.IMAGE_TAG }}
 
-    - name: Push both tags
-      run: |
-        docker push $IMAGE_NAME:latest
-        docker push $IMAGE_NAME:${{ env.IMAGE_TAG }}
+      - name: 🌐 Install doctl and authenticate
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
-    - name: Conditionally tag the commit
-      run: |
-        if git ls-remote --tags origin | grep -q "refs/tags/image-${{ env.IMAGE_TAG }}"; then
-          echo "✅ Tag already exists. Skipping tag push."
-        else
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git tag -a image-${{ env.IMAGE_TAG }} -m "Image built on ${{ env.IMAGE_TAG }}"
-          git push origin image-${{ env.IMAGE_TAG }}
-        fi
+      - name: 🔜 Setup kubeconfig from DOKS
+        run: doctl kubernetes cluster kubeconfig save ${{ secrets.K8S_CLUSTER }}
 
-    - name: Create GitHub release (optional)
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: image-${{ env.IMAGE_TAG }}
-        name: 🚀 Image ${{ env.IMAGE_TAG }}
-        body: |
-          Automated Docker image release for tag `${{ env.IMAGE_TAG }}`
-          Built from commit `${{ github.sha }}`.
-        draft: false
-        prerelease: false
+      - name: 🔐 Create Supabase Secrets in Kubernetes
+        run: |
+          kubectl create secret generic supabase-secret \
+            --from-literal=POSTGRES_HOST=${{ secrets.POSTGRES_HOST }} \
+            --from-literal=POSTGRES_DB=${{ secrets.POSTGRES_DB }} \
+            --from-literal=POSTGRES_USER=${{ secrets.POSTGRES_USER }} \
+            --from-literal=POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-    - name: Rebuild .env.production from secrets
-      run: |
-        cat <<EOF > .env.production
-        ENV=${{ secrets.ENV }}
-        SERVICE_NAME=${{ secrets.SERVICE_NAME }}
-        DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
-        DROPLET_USER=${{ secrets.DROPLET_USER }}
-        DROPLET_HOST=${{ secrets.DROPLET_HOST }}
+      - name: 🔐 Create App Secrets in Kubernetes
+        run: |
+          kubectl create secret generic app-secret \
+            --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            --from-literal=AWS_REGION=${{ secrets.AWS_REGION }} \
+            --from-literal=AWS_S3_BUCKET_NAME=${{ secrets.AWS_S3_BUCKET_NAME }} \
+            --from-literal=FRONTEND_ORIGIN=${{ secrets.FRONTEND_ORIGIN }} \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-        POSTGRES_USER=${{ secrets.POSTGRES_USER }}
-        POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-        POSTGRES_DB=${{ secrets.POSTGRES_DB }}
-        POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}
-        POSTGRES_PORT=${{ secrets.POSTGRES_PORT }}
+      - name: 🔍 Dry-run manifest validation
+        run: kubectl apply --dry-run=client -f k8s/
 
-        AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_REGION=${{ secrets.AWS_REGION }}
-        AWS_S3_BUCKET_NAME=${{ secrets.AWS_S3_BUCKET_NAME }}
+      - name: 🚀 Apply manifests
+        run: |
+          kubectl apply -f k8s/app-deployment.yaml
+          kubectl apply -f k8s/app-service.yaml
+          kubectl apply -f k8s/cluster-issuer.yaml
+          kubectl apply -f k8s/app-ingress.yaml
 
-        PGADMIN_DEFAULT_EMAIL=${{ secrets.PGADMIN_DEFAULT_EMAIL }}
-        PGADMIN_DEFAULT_PASSWORD=${{ secrets.PGADMIN_DEFAULT_PASSWORD }}
+      - name: 📅 Set deployment image explicitly
+        run: |
+          kubectl set image deployment/nlp-app nlp-app=$IMAGE_NAME:${{ env.IMAGE_TAG }}
 
-        MAX_SIZE_FILE_UPLOAD=${{ secrets.MAX_SIZE_FILE_UPLOAD }}
-        
-        BETTERSTACK_API_KEY=${{ secrets.BETTERSTACK_API_KEY }}
-        BETTERSTACK_HOST=${{ secrets.BETTERSTACK_HOST }}
-        FRONTEND_ORIGIN=${{ secrets.FRONTEND_ORIGIN }}
-        EOF
+      - name: 🔖 GitHub Tag if needed
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/image-${{ env.IMAGE_TAG }}"; then
+            echo "✅ Tag already exists. Skipping."
+          else
+            git config --global user.name "github-actions"
+            git config --global user.email "actions@github.com"
+            git tag -a image-${{ env.IMAGE_TAG }} -m "Image built on ${{ env.IMAGE_TAG }}"
+            git push origin image-${{ env.IMAGE_TAG }}
+          fi
 
-        echo "APP_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }}" >> .env.production
+      - name: 📦 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: image-${{ env.IMAGE_TAG }}
+          name: 🚀 Image ${{ env.IMAGE_TAG }}
+          body: |
+            Automated Docker image release for tag `${{ env.IMAGE_TAG }}`
+            Built from commit `${{ github.sha }}`.
+          draft: false
+          prerelease: false
 
+      - name: 📢 Telegram Notify (Success)
+        if: success()
+        run: |
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="✅ *Deploy succeeded*: Image \`${{ env.IMAGE_TAG }}\` is live." \
+            -d parse_mode=Markdown
 
-    - name: Copy docker-compose, Makefile, and env file to Droplet
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
-      run: |
-        mkdir -p ~/.ssh
-        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ secrets.DROPLET_HOST }} >> ~/.ssh/known_hosts
-        scp docker-compose.production.yml Makefile .env.production ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:/root/
-
-    - name: Notify Telegram on success
-      if: success()
-      run: |
-        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-        -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-        -d text="✅ *Deploy succeeded*: Image \\`${{ env.IMAGE_TAG }}\\` is live." \
-        -d parse_mode=Markdown
-
-    - name: Notify Telegram on failure
-      if: failure()
-      run: |
-        curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
-        -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
-        -d text="❌ *Deploy failed* on commit \\`${{ github.sha }}\\`." \
-        -d parse_mode=Markdown
+      - name: ❌ Telegram Notify (Failure)
+        if: failure()
+        run: |
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="❌ *Deploy failed* on commit \`${{ github.sha }}\`." \
+            -d parse_mode=Markdown
