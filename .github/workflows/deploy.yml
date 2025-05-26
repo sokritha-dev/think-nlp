@@ -36,22 +36,34 @@ jobs:
         run: doctl kubernetes cluster kubeconfig save ${{ secrets.K8S_CLUSTER }}
 
       - name: 🔐 Create Supabase Secrets in Kubernetes
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           kubectl create secret generic supabase-secret \
-            --from-literal=POSTGRES_HOST=${{ secrets.POSTGRES_HOST }} \
-            --from-literal=POSTGRES_DB=${{ secrets.POSTGRES_DB }} \
-            --from-literal=POSTGRES_USER=${{ secrets.POSTGRES_USER }} \
-            --from-literal=POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+            --from-literal=POSTGRES_HOST=$POSTGRES_HOST \
+            --from-literal=POSTGRES_DB=$POSTGRES_DB \
+            --from-literal=POSTGRES_USER=$POSTGRES_USER \
+            --from-literal=POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
             --dry-run=client -o yaml | kubectl apply -f -
 
+
       - name: 🔐 Create App Secrets in Kubernetes
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
+          FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         run: |
           kubectl create secret generic app-secret \
-            --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            --from-literal=AWS_REGION=${{ secrets.AWS_REGION }} \
-            --from-literal=AWS_S3_BUCKET_NAME=${{ secrets.AWS_S3_BUCKET_NAME }} \
-            --from-literal=FRONTEND_ORIGIN=${{ secrets.FRONTEND_ORIGIN }} \
+            --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+            --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+            --from-literal=AWS_REGION=$AWS_REGION \
+            --from-literal=AWS_S3_BUCKET_NAME=$AWS_S3_BUCKET_NAME \
+            --from-literal=FRONTEND_ORIGIN=$FRONTEND_ORIGIN \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: 🔍 Dry-run manifest validation
