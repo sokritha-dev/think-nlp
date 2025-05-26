@@ -55,6 +55,7 @@ jobs:
 
       - name: 🔐 Create App Secrets in Kubernetes
         env:
+          ENV: ${{ secrets.ENV }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -65,6 +66,7 @@ jobs:
           FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         run: |
           kubectl create secret generic app-secret \
+            --from-literal=ENV=$ENV \
             --from-literal=AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
             --from-literal=AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
             --from-literal=AWS_REGION=$AWS_REGION \
