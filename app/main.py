@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.database import database
 from app.api import analysis, clean, eda, file, pipeline, topic_modeling, upload
+from app.middlewares.access_logger import AccessLoggingMiddleware
 from app.middlewares.logging import setup_logging
 from app.middlewares.security import (
     SecurityHeadersMiddleware,
@@ -68,6 +69,7 @@ app = FastAPI(
 add_cors_middleware(app)
 add_rate_limit(app)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(AccessLoggingMiddleware)
 
 
 # ===============
