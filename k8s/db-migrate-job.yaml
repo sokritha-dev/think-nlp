@@ -33,8 +33,48 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: POSTGRES_PORT
               value: "5432"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_REGION
+            - name: AWS_S3_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: AWS_S3_BUCKET_NAME
+            - name: MAX_SIZE_FILE_UPLOAD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: MAX_SIZE_FILE_UPLOAD
+            - name: BETTERSTACK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: BETTERSTACK_API_KEY
+            - name: BETTERSTACK_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: BETTERSTACK_HOST
             - name: ENV
               valueFrom:
                 secretKeyRef:
                   name: app-secret
                   key: ENV
+            - name: FRONTEND_ORIGIN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: FRONTEND_ORIGIN
