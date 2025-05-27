@@ -44,12 +44,14 @@ jobs:
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
         run: |
           kubectl create secret generic supabase-secret \
             --from-literal=POSTGRES_HOST=$POSTGRES_HOST \
             --from-literal=POSTGRES_DB=$POSTGRES_DB \
             --from-literal=POSTGRES_USER=$POSTGRES_USER \
             --from-literal=POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+            --from-literal=POSTGRES_PORT=$POSTGRES_PORT \
             --dry-run=client -o yaml | kubectl apply -f -
 
 
