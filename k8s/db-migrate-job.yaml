@@ -7,74 +7,11 @@ spec:
     spec:
       restartPolicy: Never
       containers:
-        - name: migrate
-          image: <IMAGE_PLACEHOLDER>
+        - name: alembic
+          image: your-dockerhub-user/think-nlp-app:latest
           command: ["alembic", "upgrade", "head"]
-          env:
-            - name: POSTGRES_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: supabase-secret
-                  key: POSTGRES_HOST
-            - name: POSTGRES_DB
-              valueFrom:
-                secretKeyRef:
-                  name: supabase-secret
-                  key: POSTGRES_DB
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: supabase-secret
-                  key: POSTGRES_USER
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: supabase-secret
-                  key: POSTGRES_PASSWORD
-            - name: POSTGRES_PORT
-              value: "5432"
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: AWS_ACCESS_KEY_ID
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: AWS_SECRET_ACCESS_KEY
-            - name: AWS_REGION
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: AWS_REGION
-            - name: AWS_S3_BUCKET_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: AWS_S3_BUCKET_NAME
-            - name: MAX_SIZE_FILE_UPLOAD
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: MAX_SIZE_FILE_UPLOAD
-            - name: BETTERSTACK_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: BETTERSTACK_API_KEY
-            - name: BETTERSTACK_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: BETTERSTACK_HOST
-            - name: ENV
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: ENV
-            - name: FRONTEND_ORIGIN
-              valueFrom:
-                secretKeyRef:
-                  name: app-secret
-                  key: FRONTEND_ORIGIN
+          envFrom:
+            - secretRef:
+                name: supabase-secret
+            - secretRef:
+                name: app-secret
