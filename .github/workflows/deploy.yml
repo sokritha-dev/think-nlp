@@ -99,10 +99,7 @@ jobs:
         run: |
           MIGRATOR_NAME=db-migrator-${{ github.run_id }}-${{ github.run_number }}
 
-          kubectl run $MIGRATOR_NAME \
-            --image=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }} \
-            --namespace default \
-            --restart=Never \
+          kubectl run $MIGRATOR_NAME --image=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }} --namespace default --restart=Never \
             --env=POSTGRES_HOST=${{ secrets.POSTGRES_HOST }} \
             --env=POSTGRES_DB=${{ secrets.POSTGRES_DB }} \
             --env=POSTGRES_USER=${{ secrets.POSTGRES_USER }} \
@@ -114,6 +111,7 @@ jobs:
           kubectl wait --for=condition=complete --timeout=60s pod/$MIGRATOR_NAME -n default || true
           kubectl logs $MIGRATOR_NAME -n default || true
           kubectl delete pod $MIGRATOR_NAME -n default || true
+
 
 
 
