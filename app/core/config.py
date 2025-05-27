@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     BETTERSTACK_HOST: str | None = None
 
     model_config = SettingsConfigDict(
-        env_file=Path(f".env.{os.environ.get('ENV', 'local')}"),
+        env_file=None,
         env_file_encoding="utf-8",
     )
 

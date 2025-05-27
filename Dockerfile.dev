@@ -26,7 +26,7 @@ RUN python -c "from transformers import pipeline; pipeline('sentiment-analysis')
 # Copy full source code
 COPY . .
 
-ENV ENV=development
+ENV ENV=local
 
 EXPOSE 8000
 

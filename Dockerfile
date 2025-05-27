@@ -26,7 +26,7 @@ RUN python -c "from transformers import pipeline; pipeline('sentiment-analysis')
 COPY . .
 
 # Set environment
-ENV ENV=local
+ENV ENV=production
 
 # Expose FastAPI port
 EXPOSE 8000
