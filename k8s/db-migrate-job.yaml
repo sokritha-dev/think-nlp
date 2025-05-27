@@ -8,7 +8,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: alembic
-          image: your-dockerhub-user/think-nlp-app:latest
+          image: sokritha7/think-nlp-app:latest
           command: ["alembic", "upgrade", "head"]
           envFrom:
             - secretRef:
