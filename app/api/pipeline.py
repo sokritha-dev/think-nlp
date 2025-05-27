@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 def run_sentiment_pipeline(file_id: str, db: Session):
     try:
+        logger.info(
+            f"Running sentiment pipeline background task with file_id: {file_id}"
+        )
         record = db.query(FileRecord).filter_by(id=file_id).first()
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
@@ -237,6 +240,8 @@ def run_sentiment_pipeline(file_id: str, db: Session):
         )
         db.add(sentiment_entry)
         db.commit()
+
+        logger.info(f"Background sentiment task completed: {file_id}")
 
         return success_response(
             message=FULL_PIPELINE_SUCCESS,

@@ -7,6 +7,10 @@ metadata:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "5m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"  # Stream directly
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "64k"  # Enough to fit 5MB in chunks
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
     cert-manager.io/cluster-issuer: "letsencrypt-thinknlp-prod"
 spec:
   ingressClassName: nginx  # ✅ Required to bind to nginx controller

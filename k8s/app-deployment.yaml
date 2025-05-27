@@ -14,11 +14,16 @@ spec:
       labels:
         app: nlp-app
     spec:
+      terminationGracePeriodSeconds: 900  # 15 minutes
       containers:
         - name: nlp-app
-          image: <DOCKERHUB_USERNAME>/think-nlp-app:latest
+          image: sokritha7/think-nlp-app:latest
           ports:
             - containerPort: 8000
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "30"]  # Delay shutdown for cleanup
           env:
             - name: POSTGRES_HOST
               valueFrom:
@@ -89,8 +94,8 @@ spec:
                   key: FRONTEND_ORIGIN
           resources:
             requests:
-              cpu: "100m"
-              memory: "256Mi"
-            limits:
               cpu: "500m"
-              memory: "512Mi"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
