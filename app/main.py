@@ -55,8 +55,6 @@ async def lifespan(app: FastAPI):
 setup_logging()
 
 
-print(f"settings::: {settings}")
-
 app = FastAPI(
     title="NLP Pipeline API",
     description="Step-by-step NLP API for topic modeling and sentiment analysis",
