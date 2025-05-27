@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     PGADMIN_DEFAULT_EMAIL: str | None = None
     PGADMIN_DEFAULT_PASSWORD: str | None = None
 
-    MAX_SIZE_FILE_UPLOAD: int
+    MAX_SIZE_FILE_UPLOAD: int | None = None
 
     FRONTEND_ORIGIN: str | None = None
     BETTERSTACK_API_KEY: str | None = None

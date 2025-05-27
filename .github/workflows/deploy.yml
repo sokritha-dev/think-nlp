@@ -95,19 +95,26 @@ jobs:
         run: |
           kubectl set image deployment/nlp-app nlp-app=$IMAGE_NAME:${{ env.IMAGE_TAG }}
 
-      - name: 🧠 Detect migration changes
-        id: check_migrations
+      - name: 🗃️ Run Alembic Migrations in Cluster
         run: |
-          git diff --quiet HEAD^ HEAD -- migrations || echo "run=true" >> $GITHUB_OUTPUT
+          MIGRATOR_NAME=db-migrator-${{ github.run_id }}-${{ github.run_number }}
 
-      - name: 🗃️ Run Alembic Migrations (if changed)
-        if: steps.check_migrations.outputs.run == 'true'
-        run: |
-          MIGRATION_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }}
-          kubectl delete job db-migrate --ignore-not-found --wait=true -n default
-          kubectl apply -f <(sed "s|<IMAGE_PLACEHOLDER>|$MIGRATION_IMAGE|" k8s/db-migrate-job.yaml)
-          kubectl wait --for=condition=complete --timeout=90s job/db-migrate -n default
-          kubectl logs job/db-migrate -n default
+          kubectl run $MIGRATOR_NAME \
+            --image=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }} \
+            --namespace default \
+            --restart=Never \
+            --env=POSTGRES_HOST=${{ secrets.POSTGRES_HOST }} \
+            --env=POSTGRES_DB=${{ secrets.POSTGRES_DB }} \
+            --env=POSTGRES_USER=${{ secrets.POSTGRES_USER }} \
+            --env=POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+            --env=POSTGRES_PORT=${{ secrets.POSTGRES_PORT }} \
+            --env=ENV=${{ secrets.ENV }} \
+            --command -- alembic upgrade head
+
+          kubectl wait --for=condition=complete --timeout=60s pod/$MIGRATOR_NAME -n default || true
+          kubectl logs $MIGRATOR_NAME -n default || true
+          kubectl delete pod $MIGRATOR_NAME -n default || true
+
 
 
       - name: 🔖 GitHub Tag if needed
