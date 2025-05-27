@@ -95,6 +95,21 @@ jobs:
         run: |
           kubectl set image deployment/nlp-app nlp-app=$IMAGE_NAME:${{ env.IMAGE_TAG }}
 
+      - name: 🧠 Detect migration changes
+        id: check_migrations
+        run: |
+          git diff --quiet HEAD^ HEAD -- migrations || echo "run=true" >> $GITHUB_OUTPUT
+
+      - name: 🗃️ Run Alembic Migrations (if changed)
+        if: steps.check_migrations.outputs.run == 'true'
+        run: |
+          MIGRATION_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/think-nlp-app:${{ env.IMAGE_TAG }}
+          kubectl delete job db-migrate --ignore-not-found -n default
+          kubectl apply -f <(sed "s|<IMAGE_PLACEHOLDER>|$MIGRATION_IMAGE|" k8s/db-migrate-job.yaml)
+          kubectl wait --for=condition=complete --timeout=90s job/db-migrate -n default
+          kubectl logs job/db-migrate -n default
+
+
       - name: 🔖 GitHub Tag if needed
         run: |
           if git ls-remote --tags origin | grep -q "refs/tags/image-${{ env.IMAGE_TAG }}"; then
