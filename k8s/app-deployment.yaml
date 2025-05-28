@@ -9,6 +9,11 @@ spec:
   selector:
     matchLabels:
       app: nlp-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0           # Prevent 3rd pod during update
+      maxUnavailable: 1     # Allow 1 pod to go down before replacing
   template:
     metadata:
       labels:
@@ -95,7 +100,8 @@ spec:
           resources:
             requests:
               cpu: "500m"
-              memory: "1Gi"
+              memory: "512Mi"
             limits:
               cpu: "1"
-              memory: "2Gi"
+              memory: "1Gi"
+

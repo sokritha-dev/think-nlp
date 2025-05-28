@@ -1,8 +1,7 @@
 # app/core/database.py
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import declarative_base
 from app.core.config import settings
 
 Base = declarative_base()
@@ -10,20 +9,21 @@ Base = declarative_base()
 
 class Database:
     def __init__(self):
-        self._engine = create_engine(
-            f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
-            f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
+        self._engine = create_async_engine(
+            f"postgresql+asyncpg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
+            f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}",
+            echo=False,  # Optional: log SQL
+            future=True,
         )
-        self._SessionLocal = sessionmaker(
-            autocommit=False, autoflush=False, bind=self._engine
+        self._SessionLocal = async_sessionmaker(
+            bind=self._engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
         )
 
-    def get_db(self):
-        db: Session = self._SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    async def get_db(self):
+        async with self._SessionLocal() as session:
+            yield session
 
 
 # Usage

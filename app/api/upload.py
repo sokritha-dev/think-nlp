@@ -3,7 +3,8 @@
 from fastapi import APIRouter, Request, UploadFile, File, Depends
 from uuid import uuid4
 import pandas as pd
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
 from app.middlewares.file_validators import validate_csv
@@ -35,7 +36,7 @@ async def upload_csv(
     request: Request,
     file: UploadFile = File(...),
     validated: tuple[bytes, pd.DataFrame] = Depends(validate_csv(["review"])),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     s3_uploaded = False
     s3_key = None
@@ -45,7 +46,9 @@ async def upload_csv(
 
         # Step 1: Hash and check deduplication
         file_hash = compute_sha256(contents)
-        existing = db.query(FileRecord).filter_by(file_hash=file_hash).first()
+        existing = (
+            await db.execute(select(FileRecord).filter_by(file_hash=file_hash))
+        ).scalar_one_or_none()
         if existing:
             logger.info(
                 "⚠️ Duplicate upload detected. Returning existing file metadata."
@@ -62,7 +65,7 @@ async def upload_csv(
             )
 
         s3_key = f"user-data/{uuid4()}.csv.gz"
-        s3_url = upload_compressed_csv_to_s3(contents, s3_key)
+        s3_url = await upload_compressed_csv_to_s3(contents, s3_key)
 
         s3_uploaded = True
 
@@ -77,8 +80,8 @@ async def upload_csv(
             file_hash=file_hash,
         )
         db.add(file_record)
-        db.commit()
-        db.refresh(file_record)
+        await db.commit()
+        await db.refresh(file_record)
 
         logger.info(f"✅ Uploaded and saved {s3_key} ({len(df)} rows)")
 
@@ -101,7 +104,7 @@ async def upload_csv(
         logger.exception(f"❌ Unexpected upload error: {e}")
         if s3_uploaded and s3_key:
             try:
-                delete_file_from_s3(s3_key)
+                await delete_file_from_s3(s3_key)
                 logger.info(f"🗑️ Rolled back S3 upload: {s3_key}")
             except Exception as s3e:
                 logger.error(f"❗ Failed to delete file from S3 during rollback: {s3e}")

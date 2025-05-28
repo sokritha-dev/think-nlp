@@ -3,7 +3,8 @@
 from datetime import datetime
 import json
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 import pandas as pd
 from io import BytesIO
@@ -44,16 +45,25 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/lda", response_model=LDATopicResponse)
-async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get_db)):
+async def run_lda_topic_modeling(
+    req: LDATopicRequest, db: AsyncSession = Depends(get_db)
+):
     try:
         file_id = req.file_id
-        record = db.query(FileRecord).filter_by(id=file_id).first()
+        record = (
+            await db.execute(select(FileRecord).filter_by(id=file_id))
+        ).scalar_one_or_none()
+
         if not record or not record.lemmatized_s3_key:
             raise NotFoundError(
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
 
-        existing = db.query(TopicModel).filter_by(file_id=file_id, method="LDA").first()
+        existing = (
+            await db.execute(
+                select(TopicModel).filter_by(file_id=file_id, method="LDA")
+            )
+        ).scalar_one_or_none()
 
         if (
             existing
@@ -72,7 +82,7 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 },
             )
 
-        file_bytes = download_file_from_s3(record.lemmatized_s3_key)
+        file_bytes = await download_file_from_s3(record.lemmatized_s3_key)
         if record.lemmatized_s3_key.endswith(".gz"):
             with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
                 df = pd.read_csv(gz)
@@ -96,14 +106,14 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
         output_buffer.seek(0)
 
         new_s3_key = f"lda/lda_topics_{uuid4()}.csv.gz"
-        s3_url = upload_file_to_s3(
+        s3_url = await upload_file_to_s3(
             output_buffer, new_s3_key, content_type="application/gzip"
         )
 
         if existing:
             if existing.s3_key and existing.s3_key != new_s3_key:
                 try:
-                    delete_file_from_s3(existing.s3_key)
+                    await delete_file_from_s3(existing.s3_key)
                     logger.info(f"🗑️ Deleted old LDA file from S3: {existing.s3_key}")
                 except Exception as del_err:
                     logger.warning(f"⚠️ Failed to delete old LDA file: {del_err}")
@@ -113,7 +123,8 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
             existing.topic_count = num_topics
             existing.summary_json = json.dumps(topic_summary)
             existing.topic_updated_at = datetime.now()
-            db.commit()
+
+            await db.commit()
         else:
             new_entry = TopicModel(
                 id=str(uuid4()),
@@ -126,7 +137,8 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
                 topic_updated_at=datetime.now(),
             )
             db.add(new_entry)
-            db.commit()
+
+            await db.commit()
 
         return success_response(
             message=LDA_COMPLETED,
@@ -146,9 +158,11 @@ async def run_lda_topic_modeling(req: LDATopicRequest, db: Session = Depends(get
 
 
 @router.post("/label", response_model=TopicLabelResponse)
-async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
+async def label_topics(req: TopicLabelRequest, db: AsyncSession = Depends(get_db)):
     try:
-        topic_model = db.query(TopicModel).filter_by(id=req.topic_model_id).first()
+        topic_model = (
+            await db.execute(select(TopicModel).filter_by(id=req.topic_model_id))
+        ).scalar_one_or_none()
         if not topic_model:
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
@@ -203,7 +217,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
                 topic["matched_with"] = "auto_generated"
 
         # Save labeled file
-        file_bytes = download_file_from_s3(topic_model.s3_key)
+        file_bytes = await download_file_from_s3(topic_model.s3_key)
         if topic_model.s3_key.endswith(".gz"):
             with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
                 df = pd.read_csv(gz)
@@ -228,11 +242,11 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
 
         if topic_model.s3_key != new_s3_key:
             try:
-                delete_file_from_s3(topic_model.s3_key)
+                await delete_file_from_s3(topic_model.s3_key)
             except Exception as del_err:
                 logger.warning(f"⚠️ Failed to delete old S3 file: {del_err}")
 
-        s3_url = upload_file_to_s3(buffer, new_s3_key)
+        s3_url = await upload_file_to_s3(buffer, new_s3_key)
 
         topic_model.s3_key = new_s3_key
         topic_model.s3_url = s3_url
@@ -240,7 +254,7 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
         topic_model.label_keywords = json.dumps(req.keywords or [])
         topic_model.label_map_json = json.dumps(req.label_map or {})
         topic_model.label_updated_at = datetime.now()
-        db.commit()
+        await db.commit()
 
         return success_response(
             message=TOPIC_LABELING_COMPLETED,
@@ -265,10 +279,12 @@ async def label_topics(req: TopicLabelRequest, db: Session = Depends(get_db)):
 @router.get("/label", response_model=TopicLabelResponse)
 async def get_existing_topic_labels(
     topic_model_id: str = Query(...),  # Required query param
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        topic_model = db.query(TopicModel).filter_by(id=topic_model_id).first()
+        topic_model = (
+            await db.execute(select(TopicModel).filter_by(id=topic_model_id))
+        ).scalar_one_or_none()
         if not topic_model:
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND

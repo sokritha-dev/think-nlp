@@ -3,7 +3,6 @@ import gzip
 import json
 from uuid import uuid4
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
 import pandas as pd
 from io import BytesIO
 import logging
@@ -31,6 +30,8 @@ from app.services.sentiment_analysis import (
 )
 from app.utils.response_builder import success_response
 from app.utils.exceptions import NotFoundError, ServerError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/sentiment", tags=["Sentiment"])
 logger = logging.getLogger(__name__)
@@ -48,20 +49,23 @@ def classify_sentiment(text: str, method: str) -> str:
 
 
 @router.post("/", response_model=SentimentResponse)
-async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)):
+async def analyze_sentiment(req: SentimentRequest, db: AsyncSession = Depends(get_db)):
     try:
-        topic_model = db.query(TopicModel).filter_by(id=req.topic_model_id).first()
+        result = await db.execute(select(TopicModel).filter_by(id=req.topic_model_id))
+        topic_model = result.scalars().first()
+
         if not topic_model:
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
-        existing = (
-            db.query(SentimentAnalysis)
+        result = await db.execute(
+            select(SentimentAnalysis)
             .filter_by(topic_model_id=req.topic_model_id, method=req.method)
             .order_by(SentimentAnalysis.updated_at.desc())
-            .first()
         )
+        existing = result.scalars().first()
+
         if existing and existing.updated_at >= topic_model.label_updated_at:
             summary_result = SentimentChartData(
                 overall={
@@ -78,7 +82,7 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
                 data=summary_result,
             )
 
-        file_bytes = download_file_from_s3(topic_model.s3_key)
+        file_bytes = await download_file_from_s3(topic_model.s3_key)
         if topic_model.s3_key.endswith(".gz"):
             with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
                 df = pd.read_csv(gz)
@@ -147,8 +151,9 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
             per_topic_json=json.dumps([t.model_dump() for t in topic_stats]),
             updated_at=datetime.now(),
         )
+
         db.add(entry)
-        db.commit()
+        await db.commit()
 
         return success_response(message=SENTIMENT_ANALYSIS_SUCCESS, data=summary_result)
 
@@ -169,10 +174,12 @@ async def analyze_sentiment(req: SentimentRequest, db: Session = Depends(get_db)
 async def get_sentiment_result(
     topic_model_id: str = Query(...),
     method: str = Query(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        topic_model = db.query(TopicModel).filter_by(id=topic_model_id).first()
+        result = await db.execute(select(TopicModel).filter_by(id=topic_model_id))
+        topic_model = result.scalars().first()
+
         if not topic_model:
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND

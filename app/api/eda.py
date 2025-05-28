@@ -2,10 +2,12 @@ from datetime import datetime
 import gzip
 import json
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
 import pandas as pd
 from io import BytesIO
 import logging
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 from app.core.database import get_db
 from app.models.db.file_record import FileRecord
@@ -26,10 +28,12 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/summary")
-async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
+async def generate_eda(req: EDARequest, db: AsyncSession = Depends(get_db)):
     try:
         file_id = req.file_id
-        record = db.query(FileRecord).filter_by(id=file_id).first()
+        record = (
+            await db.execute(select(FileRecord).filter_by(id=file_id))
+        ).scalar_one_or_none()
 
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND_FOR_EDA)
@@ -38,10 +42,6 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
             raise NotFoundError(
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
-
-        print(f"lemmatized updated at::: {record.lemmatized_updated_at}")
-        print(f"eda_updated_at::: {record.eda_updated_at}")
-        print(f"hello::: {record.lemmatized_updated_at < record.eda_updated_at}")
 
         if record.lemmatized_updated_at < record.eda_updated_at:
             eda_result = json.loads(record.eda_analysis)
@@ -54,9 +54,8 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
                 },
             )
 
-        print("why it possible....")
         # Step 1: Download and decompress
-        file_bytes = download_file_from_s3(record.lemmatized_s3_key)
+        file_bytes = await download_file_from_s3(record.lemmatized_s3_key)
         if record.lemmatized_s3_key.endswith(".gz"):
             with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
                 df = pd.read_csv(gz)
@@ -70,7 +69,7 @@ async def generate_eda(req: EDARequest, db: Session = Depends(get_db)):
         # Step 3: Optional metadata (for audit/update tracking)
         record.eda_analysis = json.dumps(eda_result)
         record.eda_updated_at = datetime.now()
-        db.commit()
+        await db.commit()
 
         logger.info(f"✅ EDA (data) completed for file {file_id}")
 

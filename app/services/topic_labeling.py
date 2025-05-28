@@ -28,7 +28,7 @@ def auto_match_labels(
                 "keywords": topic["keywords"],
                 "label": matched_label,
                 "confidence": round(best_score, 4),
-                "matched_with": "auto match keywords"
+                "matched_with": "auto match keywords",
             }
         )
 

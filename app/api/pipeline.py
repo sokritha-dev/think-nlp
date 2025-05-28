@@ -4,7 +4,8 @@ from datetime import datetime
 import gzip
 import json
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import pandas as pd
 from uuid import uuid4
 from io import BytesIO
@@ -48,28 +49,45 @@ router = APIRouter(prefix="/api/pipeline", tags=["Full Pipeline"])
 logger = logging.getLogger(__name__)
 
 
-def run_sentiment_pipeline(file_id: str, db: Session):
+async def run_sentiment_pipeline(file_id: str, db: AsyncSession):
     try:
         logger.info(
             f"Running sentiment pipeline background task with file_id: {file_id}"
         )
-        record = db.query(FileRecord).filter_by(id=file_id).first()
+        record = (
+            await db.execute(select(FileRecord).filter_by(id=file_id))
+        ).scalar_one_or_none()
+
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
 
         existing_topic_model = (
-            db.query(TopicModel)
-            .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.label_updated_at.desc())
+            (
+                await db.execute(
+                    select(TopicModel)
+                    .filter_by(file_id=file_id, method="LDA")
+                    .order_by(TopicModel.label_updated_at.desc())
+                )
+            )
+            .scalars()
             .first()
         )
+
         if existing_topic_model:
             existing_sentiment = (
-                db.query(SentimentAnalysis)
-                .filter_by(topic_model_id=existing_topic_model.id, method="vader")
-                .order_by(SentimentAnalysis.updated_at.desc())
+                (
+                    await db.execute(
+                        select(SentimentAnalysis)
+                        .filter_by(
+                            topic_model_id=existing_topic_model.id, method="vader"
+                        )
+                        .order_by(SentimentAnalysis.updated_at.desc())
+                    )
+                )
+                .scalars()
                 .first()
             )
+
             if (
                 existing_sentiment
                 and record.lemmatized_updated_at
@@ -92,7 +110,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
                     },
                 )
 
-        original_bytes = download_file_from_s3(record.s3_key)
+        original_bytes = await download_file_from_s3(record.s3_key)
         if record.s3_key.endswith(".gz"):
             with gzip.GzipFile(fileobj=BytesIO(original_bytes)) as gz:
                 df = pd.read_csv(gz)
@@ -101,7 +119,9 @@ def run_sentiment_pipeline(file_id: str, db: Session):
 
         df["normalized_review"] = df["review"].dropna().apply(normalize_text)
 
-        norm_key, norm_url = save_csv_to_s3(df, "normalization", suffix="normalized")
+        norm_key, norm_url = await save_csv_to_s3(
+            df, "normalization", suffix="normalized"
+        )
         record.normalized_s3_key = norm_key
         record.normalized_s3_url = norm_url
         record.normalized_updated_at = datetime.now()
@@ -113,7 +133,9 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             removed_chars.extend(removed)
         df["special_cleaned"] = cleaned_rows
 
-        clean_key, clean_url = save_csv_to_s3(df, "cleaned", suffix="special_cleaned")
+        clean_key, clean_url = await save_csv_to_s3(
+            df, "cleaned", suffix="special_cleaned"
+        )
         record.special_cleaned_s3_key = clean_key
         record.special_cleaned_s3_url = clean_url
         record.special_cleaned_flags = json.dumps(
@@ -124,7 +146,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
 
         df["tokens"] = df["special_cleaned"].dropna().apply(tokenize_text)
 
-        token_key, token_url = save_csv_to_s3(df, "tokenization", suffix="tokens")
+        token_key, token_url = await save_csv_to_s3(df, "tokenization", suffix="tokens")
         record.tokenized_s3_key = token_key
         record.tokenized_s3_url = token_url
         record.tokenized_updated_at = datetime.now()
@@ -133,7 +155,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             lambda toks: remove_stopwords_from_tokens(toks)["cleaned_tokens"]
         )
 
-        stopword_key, stopword_url = save_csv_to_s3(
+        stopword_key, stopword_url = await save_csv_to_s3(
             df, "stopwords", suffix="stopword_removed"
         )
         record.stopword_s3_key = stopword_key
@@ -144,25 +166,27 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             lambda toks: lemmatize_tokens(toks)["lemmatized_tokens"]
         )
 
-        lemma_key, lemma_url = save_csv_to_s3(df, "lemmatization", suffix="lemmatized")
+        lemma_key, lemma_url = await save_csv_to_s3(
+            df, "lemmatization", suffix="lemmatized"
+        )
         record.lemmatized_s3_key = lemma_key
         record.lemmatized_s3_url = lemma_url
         record.lemmatized_updated_at = datetime.now()
 
-        db.commit()
+        await db.commit()
 
         eda = EDA(df=df, file_id=file_id)
         eda_result = eda.run_eda()
 
         record.eda_analysis = json.dumps(eda_result)
         record.eda_updated_at = datetime.now()
-        db.commit()
+        await db.commit()
 
         tokens = df["lemmatized_tokens"].astype(str)
         num_topics = estimate_best_num_topics(tokens)
         df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
 
-        lda_key, lda_url = save_csv_to_s3(df, "lda", suffix="lda_topics")
+        lda_key, lda_url = await save_csv_to_s3(df, "lda", suffix="lda_topics")
         lda_entry = TopicModel(
             id=str(uuid4()),
             file_id=file_id,
@@ -174,7 +198,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             topic_updated_at=datetime.now(),
         )
         db.add(lda_entry)
-        db.commit()
+        await db.commit()
 
         label_map = generate_default_labels(topic_summary)
         df["topic_label"] = df["topic_id"].apply(
@@ -186,7 +210,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             topic.setdefault("keywords", [])
 
         lda_entry.label_updated_at = datetime.now()
-        db.commit()
+        await db.commit()
 
         df["text"] = df["lemmatized_tokens"].apply(
             lambda x: " ".join(x) if isinstance(x, list) else " ".join(eval(x))
@@ -239,7 +263,7 @@ def run_sentiment_pipeline(file_id: str, db: Session):
             updated_at=datetime.now(),
         )
         db.add(sentiment_entry)
-        db.commit()
+        await db.commit()
 
         logger.info(f"Background sentiment task completed: {file_id}")
 
@@ -257,10 +281,10 @@ def run_sentiment_pipeline(file_id: str, db: Session):
 
 
 @router.post("/sentiment-analysis")
-def run_full_pipeline(
+async def run_full_pipeline(
     req: FullPipelineRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         # ✅ Enqueue background task
@@ -285,25 +309,37 @@ def run_full_pipeline(
 
 
 @router.get("/result")
-def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
+async def get_result(file_id: str = Query(...), db: AsyncSession = Depends(get_db)):
     try:
-        record = db.query(FileRecord).filter_by(id=file_id).first()
+        result = await db.execute(select(FileRecord).filter_by(id=file_id))
+        record = result.scalar_one_or_none()
+
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=SAMPLE_FILE_NOT_FOUND)
 
         topic_model = (
-            db.query(TopicModel)
-            .filter_by(file_id=file_id, method="LDA")
-            .order_by(TopicModel.label_updated_at.desc())
+            (
+                await db.execute(
+                    select(TopicModel)
+                    .filter_by(file_id=file_id, method="LDA")
+                    .order_by(TopicModel.label_updated_at.desc())
+                )
+            )
+            .scalars()
             .first()
         )
 
         sentiment = None
         if topic_model:
             sentiment = (
-                db.query(SentimentAnalysis)
-                .filter_by(topic_model_id=topic_model.id, method="vader")
-                .order_by(SentimentAnalysis.updated_at.desc())
+                (
+                    await db.execute(
+                        select(SentimentAnalysis)
+                        .filter_by(topic_model_id=topic_model.id, method="vader")
+                        .order_by(SentimentAnalysis.updated_at.desc())
+                    )
+                )
+                .scalars()
                 .first()
             )
 
@@ -346,10 +382,10 @@ def get_result(file_id: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/sample-data-url")
-def get_sample_data_url(file_id: str = Query(...)):
+async def get_sample_data_url(file_id: str = Query(...)):
     try:
         s3_key = f"user-data/{file_id}.csv.gz"
-        s3_url = generate_presigned_url(
+        s3_url = await generate_presigned_url(
             bucket=settings.AWS_S3_BUCKET_NAME,
             key=s3_key,
         )

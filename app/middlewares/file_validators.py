@@ -1,13 +1,15 @@
-# app/middlewares/file_validators.py
-
-from typing import List
-from fastapi import UploadFile, File, HTTPException, Depends
+import time
+import asyncio
 import pandas as pd
 from io import StringIO
+from typing import List, Tuple
+from fastapi import UploadFile, File, HTTPException, Depends
 from app.core.config import settings
+import logging
 
+logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE_MB = settings.MAX_SIZE_FILE_UPLOAD | 5
+MAX_FILE_SIZE_MB = settings.MAX_SIZE_FILE_UPLOAD or 5
 ALLOWED_CONTENT_TYPES = ["text/csv"]
 
 
@@ -20,8 +22,8 @@ def validate_extension(file: UploadFile = File(...)) -> UploadFile:
     return file
 
 
-def validate_file_size(file: UploadFile = Depends(validate_extension)) -> bytes:
-    contents = file.file.read()
+async def validate_file_size(file: UploadFile = Depends(validate_extension)) -> bytes:
+    contents = await file.read()
     if len(contents) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(
             status_code=413,
@@ -30,13 +32,19 @@ def validate_file_size(file: UploadFile = Depends(validate_extension)) -> bytes:
     return contents
 
 
-def validate_required_columns(
-    contents: bytes = Depends(validate_file_size),
+async def validate_required_columns(
+    contents: bytes,
     required_columns: List[str] = ["review"],
 ) -> pd.DataFrame:
     try:
         decoded = contents.decode("utf-8")
-        df = pd.read_csv(StringIO(decoded))
+
+        def parse_csv():
+            return pd.read_csv(StringIO(decoded))
+
+        loop = asyncio.get_event_loop()
+        df = await loop.run_in_executor(None, parse_csv)
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid CSV format: {str(e)}")
 
@@ -49,11 +57,11 @@ def validate_required_columns(
     return df
 
 
-def validate_required_columns_not_empty(
+async def validate_required_columns_not_empty(
     df: pd.DataFrame,
     contents: bytes,
     required_columns: List[str] = ["review"],
-) -> tuple[bytes, pd.DataFrame]:
+) -> Tuple[bytes, pd.DataFrame]:
     if df.empty:
         raise HTTPException(
             status_code=400,
@@ -71,15 +79,19 @@ def validate_required_columns_not_empty(
 
 
 def validate_csv(required_columns: List[str] = ["review"]):
-    def dependency(
+    async def dependency(
         file: UploadFile = File(...),
-    ) -> tuple[bytes, pd.DataFrame]:
+    ) -> Tuple[bytes, pd.DataFrame]:
+        start = time.time()
+
         file_checked = validate_extension(file)
-        contents = validate_file_size(file_checked)
-        df = validate_required_columns(contents, required_columns)
-        contents, df_checked = validate_required_columns_not_empty(
+        contents = await validate_file_size(file_checked)
+        df = await validate_required_columns(contents, required_columns)
+        contents, df_checked = await validate_required_columns_not_empty(
             df, contents, required_columns
         )
+
+        logger.info(f"✅ Validate Middleware success in {time.time() - start:.2f}s")
         return contents, df_checked
 
     return dependency

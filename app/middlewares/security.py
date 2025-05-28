@@ -1,5 +1,7 @@
 # app/middlewares/security.py
 
+import logging
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -11,6 +13,9 @@ from slowapi.util import get_remote_address
 from app.core.config import settings
 
 
+logger = logging.getLogger(__name__)
+
+
 # ----------------------------
 # Rate Limiting Configuration
 # ----------------------------
@@ -19,8 +24,12 @@ limiter.default_limits = ["10/hour"]  # Customize as needed
 
 
 def add_rate_limit(app: FastAPI) -> None:
+    start = time.time()
+
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    logger.info(f"✅ Rate Limit success in {time.time() - start:.2f}s")
 
 
 # ----------------------------
@@ -43,6 +52,8 @@ def add_cors_middleware(app: FastAPI) -> None:
 # ----------------------------
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        start = time.time()
+
         response: Response = await call_next(request)
 
         # Enforce HTTPS
@@ -71,5 +82,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Enforce browser isolation for cross-origin embeds
         response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+
+        logger.info(f"✅ Header Security success in {time.time() - start:.2f}s")
 
         return response

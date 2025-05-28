@@ -1,7 +1,7 @@
+import asyncio
 from contextlib import asynccontextmanager
 import logging
-import time
-import sqlalchemy
+from sqlalchemy import text
 from fastapi import FastAPI, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from slowapi.errors import RateLimitExceeded
@@ -35,8 +35,8 @@ async def lifespan(app: FastAPI):
 
     for attempt in range(max_retries):
         try:
-            with database._engine.connect() as conn:
-                conn.execute(sqlalchemy.text("SELECT 1"))
+            async with database._engine.begin() as conn:
+                await conn.execute(text("SELECT 1"))
             logging.getLogger(__name__).info("✅ Successfully connected to Postgres!")
             is_ready = True
             break
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
             logging.getLogger(__name__).warning(
                 f"❌ Postgres not ready (attempt {attempt + 1}/{max_retries}) - {e}"
             )
-            time.sleep(delay_seconds)
+            await asyncio.sleep(delay_seconds)  # ← make this async too
     else:
         raise RuntimeError("🚨 Could not connect to Postgres after retries!")
 
