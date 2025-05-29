@@ -1,147 +1,149 @@
-# ThinkNLP 🧠💬
-*Interactive NLP Learning Platform for Beginners*
-
-[![🚀 Build and Deploy to DigitalOcean Kubernetes](https://github.com/sokritha-dev/think-nlp/actions/workflows/deploy.yml/badge.svg)](https://github.com/sokritha-dev/think-nlp/actions/workflows/deploy.yml)
-[![License](https://img.shields.io/github/license/sokritha-dev/think-nlp)]()
-
-🔗 [Live Demo](https://www.thinknlp.xyz)
-
----
-
-## 📚 Project Overview
-**ThinkNLP** is an educational web application designed to help beginners in Natural Language Processing (NLP) understand the full pipeline of sentiment and topic analysis using real-world review data. It provides a step-by-step, no-code interface to interactively explore how NLP models work.
-
----
-
-## ✨ Features
-- Full NLP pipeline walkthrough
-- Upload and process real review data
-- Compare sentiment models (VADER, TextBlob, BERT)
-- Topic modeling with LDA and interactive visualization (pyLDAvis)
-- Manual and auto topic labeling
-- Sentiment distribution per topic
-- Beginner-friendly UI with visual explanations
-
----
-
-## ⚙️ NLP Pipeline
-
-1. **Upload Review File**
-   - Supports CSV input, stored in AWS S3 (gzip compressed)
-
-2. **Data Cleaning**
-   - Normalization: Lowercasing, typo correction
-   - Special character removal: special character, number, and emoji
-   - Tokenization: Breaking sentences into words 
-   - Stopword Removal: remove common words that not provide useful context 
-   - Lemmatization: Converting words to their base forms
-
-3. **EDA (Exploratory Data Analysis)**
-   - Word clouds, frequency charts, sentence length plots
-
-4. **Topic Modeling**
-   - LDA with auto or manual topic count
-   - pyLDAvis visualization
-
-5. **Topic Labeling**
-   - Manual, keyword-based, or auto-inferred labels
-
-6. **Sentiment Analysis**
-   - VADER: Rule-based model
-   - TextBlob: Lexicon-based
-   - BERT: Transformer-based classifier (optional)
-
-7. **Sentiment-Topic Mapping**
-   - Each sentence assigned a dominant topic
-   - Sentiment computed per topic
-   - Output: Sentiment distribution per topic (Positive, Neutral, Negative)
-
----
-
-## 🧱 Architecture
-- **Frontend**: React + TanStack Query (Vercel)
-- **Backend**: FastAPI + PostgreSQL (Docker, DigitalOcean)
-- **Storage**: AWS S3 for file uploads
-- **Monitoring**: BetterStack for logs and metrics
-
----
-
-## 🛡️ Security & Optimization
-- Gzip file compression
-- Rate limiting & security headers
-- Future: Background processing with Celery
-
----
-
-## 🚧 Future Roadmap
-- ✅ User authentication & file history
-- ✅ Background task support (Celery + status UI)
-- ✅ Expanded model selection and interpretability features
-- ✅ Beginner tutorials and automatic result summaries
-- ✅ Support with Multiple Languages beside English Language
-
----
-
-## 👩‍🎓 Target Audience
-- NLP beginners and students
-- Educators and instructors
-- Developers interested in NLP and no-code tools
-
----
-
-## 🧪 Getting Started
-
-### Prerequisites
-- Docker
-- Python 3.11
-
-### Backend Setup
-```bash
-cd root_project
-cp .env.example .env
-make migrate        # Setup initial database schema
-make up-local       # Run the backend server
-```
-
-### Frontend Setup (Separate Repo)
-```bash
-git clone https://github.com/sokritha-dev/review-whisperer-nlp-lab.git
-cd root_project
-yarn add
-yarn dev
-```
-
-### 📁 Folder Structure
-```bash
-think-nlp/
-├── .github/workflows/        # GitHub Actions workflows
-├── .vscode/                  # VSCode editor settings
-├── app/                      # FastAPI application code
-├── k8s/                      # Kubernetes manifests
-├── metric/                   # Monitoring & metrics utilities
-├── migrations/               # Alembic migration files
-├── reports/                  # Load test and analysis reports
-├── scripts/                  # Helper and automation scripts
-├── .autoenv.zsh              # Autoenv activation for Zsh
-├── .dockerignore             # Docker ignore rules
-├── .env.sample               # Example environment variables
-├── .gitignore                # Git ignore rules
-├── .python-version           # Python version pinning
-├── Dockerfile                # Production Dockerfile
-├── Dockerfile.dev            # Development Dockerfile
-├── LICENSE                   # MIT License
-├── Makefile                  # CLI automation for dev/test/deploy
-├── alembic.ini               # Alembic configuration
-├── docker-compose.*.yml      # Docker Compose files for different envs
-├── locustfile.py             # Locust load testing script
-├── pytest.ini                # Pytest config
-├── requirements.txt          # Production dependencies
-├── requirements-dev.txt      # Development dependencies
-```
-
-### 📝 License
-This project is licensed under the MIT License.
-
-### ❤️ Acknowledgements
-- Built using FastAPI, React, and pyLDAvis
-- NLP components inspired by open-source models and tutorials
+aioboto3==14.3.0
+aiobotocore==2.22.0
+aiofiles==24.1.0
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.2
+aioitertools==0.12.0
+aiosignal==1.3.2
+alembic==1.15.2
+annotated-types==0.7.0
+anyascii==0.3.2
+anyio==4.9.0
+asyncpg==0.30.0
+attrs==25.3.0
+blinker==1.9.0
+blis==1.2.0
+boto3==1.37.3
+botocore==1.37.3
+Brotli==1.1.0
+catalogue==2.0.10
+certifi==2025.1.31
+cffi==1.17.1
+charset-normalizer==3.4.1
+click==8.1.8
+cloudpathlib==0.21.0
+colorama==0.4.6
+confection==0.1.5
+ConfigArgParse==1.7
+contourpy==1.3.1
+contractions==0.1.73
+coverage==7.8.0
+cryptography==44.0.2
+cycler==0.12.1
+cymem==2.0.11
+Deprecated==1.2.18
+emoji==2.14.1
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+fastapi==0.115.12
+filelock==3.18.0
+Flask==3.1.1
+flask-cors==6.0.0
+Flask-Login==0.6.3
+fonttools==4.56.0
+frozenlist==1.6.0
+fsspec==2025.3.2
+funcy==2.0
+gensim==4.3.3
+gevent==24.11.1
+geventhttpclient==2.3.3
+greenlet==3.1.1
+h11==0.14.0
+httpcore==1.0.7
+httpx==0.28.1
+huggingface-hub==0.30.1
+idna==3.10
+iniconfig==2.1.0
+itsdangerous==2.2.0
+Jinja2==3.1.6
+jmespath==1.0.1
+joblib==1.4.2
+kiwisolver==1.4.8
+langcodes==3.5.0
+language_data==1.3.0
+limits==5.2.0
+locust==2.34.1
+locust-plugins==4.6.0
+logtail-python==0.3.3
+Mako==1.3.10
+marisa-trie==1.2.1
+markdown-it-py==3.0.0
+MarkupSafe==3.0.2
+mdurl==0.1.2
+moto==5.1.3
+mpmath==1.3.0
+msgpack==1.1.0
+multidict==6.4.4
+murmurhash==1.0.12
+narwhals==1.34.1
+networkx==3.4.2
+nltk==3.9.1
+numexpr==2.10.2
+numpy==1.26.4
+packaging==24.2
+pandas==2.2.3
+pillow==11.1.0
+pluggy==1.5.0
+preshed==3.0.9
+propcache==0.3.1
+psutil==7.0.0
+psycopg2-binary==2.9.10
+pyahocorasick==2.1.0
+pycparser==2.22
+pydantic==2.10.6
+pydantic-settings==2.8.1
+pydantic_core==2.27.2
+Pygments==2.19.1
+pyLDAvis==3.4.1
+pyparsing==3.2.3
+pytest==8.3.5
+pytest-cov==6.1.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.1.0
+python-multipart==0.0.20
+pytz==2025.2
+PyYAML==6.0.2
+pyzmq==26.4.0
+regex==2024.11.6
+requests==2.32.3
+responses==0.25.7
+rich==13.9.4
+s3transfer==0.11.3
+safetensors==0.5.3
+scikit-learn==1.6.1
+scipy==1.13.1
+sentence-transformers==4.0.2
+setuptools==80.7.1
+shellingham==1.5.4
+six==1.17.0
+slowapi==0.1.9
+smart-open==7.1.0
+sniffio==1.3.1
+spacy==3.8.4
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+SQLAlchemy==2.0.40
+srsly==2.5.1
+starlette==0.46.1
+sympy==1.13.1
+textblob==0.19.0
+textsearch==0.0.24
+thinc==8.3.4
+threadpoolctl==3.6.0
+tokenizers==0.21.1
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
+tqdm==4.67.1
+transformers==4.51.3
+typer==0.15.2
+typing_extensions==4.13.0
+tzdata==2025.2
+urllib3==2.3.0
+uvicorn==0.34.0
+wasabi==1.1.3
+weasel==0.4.1
+Werkzeug==3.1.3
+wrapt==1.17.2
+xmltodict==0.14.2
+yarl==1.20.0
+zope.event==5.0
+zope.interface==7.2
