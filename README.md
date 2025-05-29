@@ -96,11 +96,27 @@
 - Python 3.11
 
 ### Backend Setup
+Create a Python virtual environment if you haven’t already:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Then run:
 ```bash
 cd root_project
 cp .env.example .env
 make migrate        # Setup initial database schema
 make up-local       # Run the backend server
+```
+
+Other helpful Makefile commands:
+```bash
+make reset-all      # Reset database and volumes
+make logs-local     # View backend logs
+make lint           # Run linter (ruff)
+make test           # Run backend tests with coverage
+...                 # You can check more on Makefile file
 ```
 
 ### Frontend Setup (Separate Repo)
