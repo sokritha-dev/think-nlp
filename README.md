@@ -105,7 +105,7 @@ make up-local       # Run the backend server
 
 ### Frontend Setup (Separate Repo)
 ```bash
-git clone https://github.com/sokritha-dev/review-whisperer-nlp-lab.git
+git clone https://github.com/sokritha-dev/think-nlp-frontend.git
 cd root_project
 yarn add
 yarn dev
