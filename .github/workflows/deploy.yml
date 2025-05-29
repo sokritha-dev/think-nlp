@@ -4,6 +4,14 @@ name: 🚀 Build and Deploy to DigitalOcean Kubernetes
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'k8s/**'
+      - 'Dockerfile'
+      - 'migrations/**'
+      - 'Makefile'
+      - 'metric/**'
+      - 'requirements.txt'
 
 permissions:
   contents: write 
