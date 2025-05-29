@@ -64,6 +64,10 @@
 - **Storage**: AWS S3 for file uploads
 - **Monitoring**: BetterStack for logs and metrics
 
+![ThinkNLP Architecture](./docs/thinknlp-architecture.png)
+
+<sub><i>Diagram illustrating request flow, infrastructure, CI/CD, and observability for ThinkNLP.</i></sub>
+
 ---
 
 ## 🛡️ Security & Optimization
