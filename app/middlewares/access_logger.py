@@ -16,9 +16,15 @@ class AccessLoggingMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         method = request.method
+        user_agent = request.headers.get("user-agent", "")
+
+        # Skip logging known system pings (e.g. root or /health with no user-agent)
+        if path in ["/", "/health"] and not user_agent:
+            return await call_next(request)
 
         logger.info(
-            "🛰️ Request received", extra={"ip": ip, "path": path, "method": method}
+            "🛰️ Request received",
+            extra={"ip": ip, "path": path, "method": method, "user_agent": user_agent},
         )
 
         response = await call_next(request)
