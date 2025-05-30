@@ -3,13 +3,16 @@
 from sqlalchemy import Column, String, ForeignKey, Integer, DateTime
 from sqlalchemy.sql import func
 from app.core.database import Base
+from sqlalchemy.orm import relationship
 
 
 class TopicModel(Base):
     __tablename__ = "topic_model"
 
     id = Column(String, primary_key=True, index=True)
-    file_id = Column(String, ForeignKey("file_records.id"), nullable=False)
+    file_id = Column(
+        String, ForeignKey("file_records.id", ondelete="CASCADE"), nullable=False
+    )
     method = Column(String, nullable=False)  # "LDA", "NMF", "BERTopic"
     topic_count = Column(Integer, nullable=True)
     s3_key = Column(String, nullable=False, unique=True)
@@ -27,4 +30,11 @@ class TopicModel(Base):
     )
     label_updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    sentiments = relationship(
+        "SentimentAnalysis",
+        backref="topic_model",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

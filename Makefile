@@ -137,27 +137,28 @@ view-report:
 # ============================
 # 🐘 POSTGRES & ALEMBIC
 # ============================
+COMPOSE_FILE := docker-compose.$(ENV).yml
 
 init-alembic:
-	docker compose exec $(SERVICE_NAME) alembic init migrations
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic init migrations
 
 revision:
 ifndef m
 	$(error ❌ Please provide a message with m="your message")
 endif
-	docker compose exec $(SERVICE_NAME) alembic revision --autogenerate -m "$(m)"
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic revision --autogenerate -m "$(m)"
 
 migrate:
-	docker compose exec $(SERVICE_NAME) alembic upgrade head
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic upgrade head
 
 downgrade:
-	docker compose exec $(SERVICE_NAME) alembic downgrade -1
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic downgrade -1
 
 current:
-	docker compose exec $(SERVICE_NAME) alembic current
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic current
 
 history:
-	docker compose exec $(SERVICE_NAME) alembic history
+	docker compose -f $(COMPOSE_FILE) exec $(SERVICE_NAME) alembic history
 
 pgadmin:
 	open http://localhost:5050
