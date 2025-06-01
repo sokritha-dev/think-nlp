@@ -1,0 +1,25 @@
+# Horizontal Pod Autoscaler configuration for a Kubernetes deployment
+# This configuration will scale the Pod based on CPU utilization
+# Ensure you have the Horizontal Pod Autoscaler (HPA) enabled in your cluster
+# Make sure to apply this configuration after deploying your application
+# Horizontal Pod Autoscaler for the NLP application
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nlp-app
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nlp-app
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75 # Scale up if CPU > 75% average

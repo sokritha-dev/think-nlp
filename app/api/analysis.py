@@ -185,12 +185,15 @@ async def get_sentiment_result(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
-        existing = (
-            db.query(SentimentAnalysis)
-            .filter_by(topic_model_id=topic_model_id, method=method)
+        stmt = (
+            select(SentimentAnalysis)
+            .where(SentimentAnalysis.topic_model_id == topic_model_id)
+            .where(SentimentAnalysis.method == method)
             .order_by(SentimentAnalysis.updated_at.desc())
-            .first()
+            .limit(1)
         )
+        result = await db.execute(stmt)
+        existing = result.scalars().first()
 
         if not existing:
             raise NotFoundError(

@@ -1,0 +1,32 @@
+cloudProvider: do
+
+autoDiscovery:
+  clusterName: thinknlp-cluster
+
+do:
+  tokenFromSecret:
+    name: do-api-secret
+    key: doToken
+
+rbac:
+  create: true
+
+
+extraArgs:
+  logtostderr: true # Logging level set to info
+  stderrthreshold: info
+  skip-nodes-with-local-storage: false  # ✅ Allow scaling down even if local volumes exist
+  scan-interval: 10s                    # ✅ Check every 10 seconds
+  scale-down-delay-after-add: 1m       # ⏳ Wait 1 min after adding a node before scaling down
+  scale-down-unneeded-time: 1m         # ⏳ Wait 1 min of low usage before deleting a node
+  scale-down-utilization-threshold: "0.5"  # ❗ Node is "underused" if <50% average CPU/memory
+
+
+# Resource requests and limits for the autoscaler pod
+resources:
+  requests:
+    cpu: 100m
+    memory: 300Mi
+  limits:
+    cpu: 200m
+    memory: 500Mi
