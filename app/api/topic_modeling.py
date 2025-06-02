@@ -12,6 +12,7 @@ import logging
 import gzip
 
 from app.core.database import get_db
+from app.messages.clean_messages import FILE_NOT_FOUND
 from app.models.db.file_record import FileRecord
 from app.models.db.topic_model import TopicModel
 from app.schemas.topic import (
@@ -155,6 +156,47 @@ async def run_lda_topic_modeling(
     except Exception as e:
         logger.exception(f"❌ Unexpected LDA error: {e}")
         raise ServerError(code="LDA_FAILED", message="LDA topic modeling failed.")
+
+
+@router.get("/lda")
+async def get_lda_info(file_id: str = Query(...), db: AsyncSession = Depends(get_db)):
+    try:
+        record = (
+            await db.execute(select(FileRecord).filter_by(id=file_id))
+        ).scalar_one_or_none()
+
+        if not record:
+            raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
+
+        existing = (
+            await db.execute(
+                select(TopicModel)
+                .filter_by(file_id=file_id, method="LDA")
+                .order_by(TopicModel.label_updated_at.desc())
+            )
+        ).scalar_one_or_none()
+
+        if not existing:
+            raise NotFoundError(
+                code="LDA_NOT_FOUND", message="No LDA topic model found for this file."
+            )
+
+        return success_response(
+            message="LDA topic info loaded successfully.",
+            data={
+                "file_id": file_id,
+                "topic_model_id": existing.id,
+                "topic_count": existing.topic_count,
+                "lda_topics_s3_url": existing.s3_url,
+                "topics": json.loads(existing.summary_json),
+            },
+        )
+
+    except NotFoundError as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"❌ Failed to fetch LDA info: {e}")
+        raise ServerError(code="LDA_INFO_FAILED", message="Failed to load LDA info.")
 
 
 @router.post("/label", response_model=TopicLabelResponse)

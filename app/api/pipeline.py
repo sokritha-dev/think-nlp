@@ -186,20 +186,7 @@ async def run_sentiment_pipeline(file_id: str, db: AsyncSession):
         num_topics = estimate_best_num_topics(tokens)
         df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
 
-        lda_key, lda_url = await save_csv_to_s3(df, "lda", suffix="lda_topics")
-        lda_entry = TopicModel(
-            id=str(uuid4()),
-            file_id=file_id,
-            method="LDA",
-            topic_count=num_topics,
-            s3_key=lda_key,
-            s3_url=lda_url,
-            summary_json=json.dumps(topic_summary),
-            topic_updated_at=datetime.now(),
-        )
-        db.add(lda_entry)
-        await db.commit()
-
+        # ✅ Assign default topic labels
         label_map = generate_default_labels(topic_summary)
         df["topic_label"] = df["topic_id"].apply(
             lambda x: label_map.get(int(x), f"Topic {x}")
@@ -208,8 +195,28 @@ async def run_sentiment_pipeline(file_id: str, db: AsyncSession):
             tid = int(topic["topic_id"])
             topic["label"] = label_map.get(tid)
             topic.setdefault("keywords", [])
+            topic["matched_with"] = "auto_generated"
+            topic["confidence"] = None
 
-        lda_entry.label_updated_at = datetime.now()
+        # ✅ Save topic-labeled CSV to S3
+        labeled_key, labeled_url = await save_csv_to_s3(
+            df, prefix="lda", suffix="lda_topics"
+        )
+
+        lda_entry = TopicModel(
+            id=str(uuid4()),
+            file_id=file_id,
+            method="LDA",
+            topic_count=num_topics,
+            s3_key=labeled_key,
+            s3_url=labeled_url,
+            summary_json=json.dumps(topic_summary),
+            label_map_json=json.dumps(label_map),
+            label_keywords=json.dumps([]),
+            topic_updated_at=datetime.now(),
+            label_updated_at=datetime.now(),
+        )
+        db.add(lda_entry)
         await db.commit()
 
         df["text"] = df["lemmatized_tokens"].apply(

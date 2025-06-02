@@ -13,13 +13,7 @@ bert_pipeline = pipeline(
 
 def analyze_sentiment_bert(text: str) -> str:
     result = bert_pipeline(text[:512])[0]["label"]
-    return (
-        "positive"
-        if "5" in result or "4" in result
-        else "neutral"
-        if "3" in result
-        else "negative"
-    )
+    return result.lower()  # returns "positive" or "negative"
 
 
 def analyze_sentiment_textblob(text: str) -> str:

@@ -89,6 +89,8 @@ async def analyze_sentiment(req: SentimentRequest, db: AsyncSession = Depends(ge
         else:
             df = pd.read_csv(BytesIO(file_bytes))
 
+        print(f"DataFrame columns: {df.columns.tolist()}")
+
         if not all(
             col in df.columns
             for col in ["lemmatized_tokens", "topic_id", "topic_label"]
