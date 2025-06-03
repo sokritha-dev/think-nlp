@@ -12,11 +12,14 @@ class SentimentAnalysis(Base):
     )
     method = Column(String, nullable=False)  # "vader", "bert", "textblob"
 
-    overall_positive = Column(Float, nullable=False)
-    overall_neutral = Column(Float, nullable=False)
-    overall_negative = Column(Float, nullable=False)
+    overall_positive = Column(Float, nullable=True)
+    overall_neutral = Column(Float, nullable=True)
+    overall_negative = Column(Float, nullable=True)
 
-    per_topic_json = Column(JSON, nullable=False)  # [{label, pos, neu, neg}, ...]
+    per_topic_json = Column(JSON, nullable=True)  # [{label, pos, neu, neg}, ...]
+    status = Column(
+        String, default="pending"
+    )  # "pending", "processing", "completed", "failed"
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(

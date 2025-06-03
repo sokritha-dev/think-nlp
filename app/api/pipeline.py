@@ -268,6 +268,7 @@ async def run_sentiment_pipeline(file_id: str, db: AsyncSession):
             overall_negative=overall["negative"],
             per_topic_json=json.dumps([t.model_dump() for t in per_topic]),
             updated_at=datetime.now(),
+            status="done",
         )
         db.add(sentiment_entry)
         await db.commit()

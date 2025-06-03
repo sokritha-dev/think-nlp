@@ -1,33 +1,23 @@
 from datetime import datetime
-import gzip
 import json
 from uuid import uuid4
-from fastapi import APIRouter, Depends, Query
-import pandas as pd
-from io import BytesIO
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 import logging
 
 from app.core.database import get_db
 from app.messages.analysis_messages import (
     SENTIMENT_ANALYSIS_ALREADY_EXISTS,
-    SENTIMENT_ANALYSIS_SUCCESS,
-    TOPIC_FILE_INVALID,
 )
 from app.messages.topic_messages import TOPIC_MODEL_NOT_FOUND
 from app.models.db.sentiment_analysis import SentimentAnalysis
 from app.models.db.topic_model import TopicModel
-from app.services.s3_uploader import download_file_from_s3
+from app.services.background_run_sentiment import run_sentiment_background
 from app.schemas.sentiment import (
     SentimentRequest,
     SentimentResponse,
     SentimentChartData,
-    SentimentTopicBreakdown,
 )
-from app.services.sentiment_analysis import (
-    analyze_sentiment_bert,
-    analyze_sentiment_textblob,
-    analyze_sentiment_vader,
-)
+
 from app.utils.response_builder import success_response
 from app.utils.exceptions import NotFoundError, ServerError
 from sqlalchemy import select
@@ -37,28 +27,22 @@ router = APIRouter(prefix="/api/sentiment", tags=["Sentiment"])
 logger = logging.getLogger(__name__)
 
 
-def classify_sentiment(text: str, method: str) -> str:
-    if method == "vader":
-        return analyze_sentiment_vader(text)
-    elif method == "textblob":
-        return analyze_sentiment_textblob(text)
-    elif method == "bert":
-        return analyze_sentiment_bert(text)
-    else:
-        raise ValueError("Unsupported method")
-
-
 @router.post("/", response_model=SentimentResponse)
-async def analyze_sentiment(req: SentimentRequest, db: AsyncSession = Depends(get_db)):
+async def analyze_sentiment(
+    req: SentimentRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     try:
+        # 1. Validate topic model
         result = await db.execute(select(TopicModel).filter_by(id=req.topic_model_id))
         topic_model = result.scalars().first()
-
         if not topic_model:
             raise NotFoundError(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
+        # 2. Check for existing sentiment record
         result = await db.execute(
             select(SentimentAnalysis)
             .filter_by(topic_model_id=req.topic_model_id, method=req.method)
@@ -66,8 +50,12 @@ async def analyze_sentiment(req: SentimentRequest, db: AsyncSession = Depends(ge
         )
         existing = result.scalars().first()
 
-        if existing and existing.updated_at >= topic_model.label_updated_at:
-            summary_result = SentimentChartData(
+        if (
+            existing
+            and existing.status == "done"
+            and existing.updated_at >= topic_model.label_updated_at
+        ):
+            chart = SentimentChartData(
                 overall={
                     "positive": existing.overall_positive,
                     "neutral": existing.overall_neutral,
@@ -79,96 +67,37 @@ async def analyze_sentiment(req: SentimentRequest, db: AsyncSession = Depends(ge
 
             return success_response(
                 message=SENTIMENT_ANALYSIS_ALREADY_EXISTS,
-                data=summary_result,
+                data={"status": existing.status, **chart},
             )
 
-        file_bytes = await download_file_from_s3(topic_model.s3_key)
-        if topic_model.s3_key.endswith(".gz"):
-            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
-                df = pd.read_csv(gz)
-        else:
-            df = pd.read_csv(BytesIO(file_bytes))
-
-        print(f"DataFrame columns: {df.columns.tolist()}")
-
-        if not all(
-            col in df.columns
-            for col in ["lemmatized_tokens", "topic_id", "topic_label"]
-        ):
-            raise ServerError(code="TOPIC_FILE_INVALID", message=TOPIC_FILE_INVALID)
-
-        df["text"] = df["lemmatized_tokens"].apply(
-            lambda x: " ".join(eval(x)) if isinstance(x, str) else str(x)
-        )
-        df["sentiment"] = df["text"].apply(
-            lambda x: classify_sentiment(x, req.method.lower())
-        )
-
-        sentiment_counts = df["sentiment"].value_counts().to_dict()
-        total = len(df)
-        overall = {
-            "positive": round((sentiment_counts.get("positive", 0) / total) * 100, 1),
-            "neutral": round((sentiment_counts.get("neutral", 0) / total) * 100, 1),
-            "negative": round((sentiment_counts.get("negative", 0) / total) * 100, 1),
-        }
-
-        topic_summary = json.loads(topic_model.summary_json)
-        topic_map = {int(t["topic_id"]): t for t in topic_summary}
-
-        topic_stats = []
-        for topic_id, group in df.groupby("topic_label"):
-            count = len(group)
-            tid = int(group["topic_id"].iloc[0])
-            keywords = topic_map.get(tid, {}).get("keywords", [])
-            if isinstance(keywords, str):
-                keywords = [k.strip() for k in keywords.split(",")]
-
-            topic_stats.append(
-                SentimentTopicBreakdown(
-                    label=topic_id,
-                    positive=round(
-                        (group["sentiment"] == "positive").sum() / count * 100, 1
-                    ),
-                    neutral=round(
-                        (group["sentiment"] == "neutral").sum() / count * 100, 1
-                    ),
-                    negative=round(
-                        (group["sentiment"] == "negative").sum() / count * 100, 1
-                    ),
-                    keywords=keywords,
-                )
-            )
-
-        summary_result = SentimentChartData(
-            overall=overall, per_topic=topic_stats, should_recompute=False
-        ).model_dump()
-
-        entry = SentimentAnalysis(
+        # 3. Create new pending entry if none exists or previous failed/outdated
+        new_entry = SentimentAnalysis(
             id=str(uuid4()),
             topic_model_id=req.topic_model_id,
             method=req.method,
-            overall_positive=overall["positive"],
-            overall_neutral=overall["neutral"],
-            overall_negative=overall["negative"],
-            per_topic_json=json.dumps([t.model_dump() for t in topic_stats]),
+            status="pending",
             updated_at=datetime.now(),
         )
-
-        db.add(entry)
+        db.add(new_entry)
         await db.commit()
 
-        return success_response(message=SENTIMENT_ANALYSIS_SUCCESS, data=summary_result)
+        # 4. Launch background task
+        background_tasks.add_task(
+            run_sentiment_background, db, req.topic_model_id, req.method.lower()
+        )
+
+        return success_response(
+            message="Sentiment analysis started in background.",
+            data={"status": "pending"},
+        )
 
     except NotFoundError as e:
-        logger.exception(f"Sentiment analysis failed: {e}")
-        raise e
-    except ServerError as e:
-        logger.exception(f"Sentiment analysis failed: {e}")
         raise e
     except Exception as e:
-        logger.exception(f"Sentiment analysis failed: {e}")
+        logger.exception(f"Sentiment analysis POST failed: {e}")
         raise ServerError(
-            code="SENTIMENT_ANALYSIS_FAILED", message="Sentiment analysis failed."
+            code="SENTIMENT_ANALYSIS_FAILED",
+            message="An unexpected error occurred during sentiment initialization.",
         )
 
 
@@ -204,19 +133,23 @@ async def get_sentiment_result(
             )
 
         should_recompute = topic_model.label_updated_at > existing.updated_at
+        per_topic = []
+        if existing.per_topic_json:
+            per_topic = json.loads(existing.per_topic_json)
+
         summary_result = SentimentChartData(
             overall={
-                "positive": existing.overall_positive,
-                "neutral": existing.overall_neutral,
-                "negative": existing.overall_negative,
+                "positive": existing.overall_positive or 0.0,
+                "neutral": existing.overall_neutral or 0.0,
+                "negative": existing.overall_negative or 0.0,
             },
-            per_topic=json.loads(existing.per_topic_json),
+            per_topic=per_topic,
             should_recompute=should_recompute,
         ).model_dump()
 
         return success_response(
             message=SENTIMENT_ANALYSIS_ALREADY_EXISTS,
-            data={**summary_result},
+            data={"status": existing.status, **summary_result},
         )
 
     except NotFoundError as e:
