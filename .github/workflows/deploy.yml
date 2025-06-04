@@ -109,7 +109,7 @@ jobs:
         run: |
           kubectl delete job db-migrate -n default --ignore-not-found
           kubectl apply -f k8s/db-migrate-job.yaml
-          kubectl wait --for=condition=complete --timeout=90s job/db-migrate -n default
+          kubectl wait --for=condition=complete --timeout=300s job/db-migrate -n default
           kubectl logs job/db-migrate -n default
 
       - name: 🔖 GitHub Tag if needed
