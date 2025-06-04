@@ -20,6 +20,16 @@ spec:
         app: nlp-app
     spec:
       terminationGracePeriodSeconds: 900  # 15 minutes
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - nlp-app
+              topologyKey: "kubernetes.io/hostname"
       containers:
         - name: nlp-app
           image: sokritha7/think-nlp-app:latest

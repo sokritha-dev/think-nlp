@@ -27,5 +27,7 @@ class Database:
 
 
 # Usage
+# Usage
 database = Database()
-get_db = database.get_db
+get_db = database.get_db  # for FastAPI Depends
+async_session = database._SessionLocal  # for direct async with usage
