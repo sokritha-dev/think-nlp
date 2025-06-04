@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github"
       - 'app/**'
       - 'k8s/**'
       - 'Dockerfile'
