@@ -1,5 +1,3 @@
-# app/api/clean.py
-
 import ast
 import gzip
 from fastapi import APIRouter, Depends, Query
