@@ -83,7 +83,7 @@ async def analyze_sentiment(
 
         # 4. Launch background task
         background_tasks.add_task(
-            run_sentiment_background, db, req.topic_model_id, req.method.lower()
+            run_sentiment_background, req.topic_model_id, req.method.lower()
         )
 
         return success_response(

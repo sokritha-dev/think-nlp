@@ -1,6 +1,6 @@
 # app/models/db/file_record.py
 
-from sqlalchemy import JSON, Boolean, Column, String, Integer, DateTime
+from sqlalchemy import JSON, Boolean, Column, String, Integer, DateTime, Text
 from sqlalchemy.sql import func
 from app.core.database import Base
 from sqlalchemy.orm import relationship
@@ -32,6 +32,7 @@ class FileRecord(Base):
 
     tokenized_s3_key = Column(String, nullable=True)
     tokenized_s3_url = Column(String, nullable=True)
+    tokenized_config = Column(Text, nullable=True)
     tokenized_updated_at = Column(DateTime(timezone=True), nullable=True)
 
     stopword_s3_key = Column(String, nullable=True)

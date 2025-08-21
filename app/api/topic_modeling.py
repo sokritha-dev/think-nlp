@@ -1,17 +1,25 @@
 # app/api/topic.py
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid import uuid4
-import pandas as pd
-from io import BytesIO
 import logging
-import gzip
 
 from app.core.database import get_db
+from app.core.file_handler.codec import CsvCodec
+from app.core.file_handler.compression import GzipCompression
+from app.core.file_handler.storage import S3Storage
+from app.core.topic_labeling.config import TopicLabelConfig
+from app.core.topic_labeling.labelers import (
+    DefaultHeuristicLabeler,
+    ExplicitLabeler,
+    SBertKeywordLabeler,
+)
+from app.core.topic_modeling.config import TopicEstimationConfig, TopicModelConfig
+from app.core.topic_modeling.gensim_lda import GensimLDAModeler
 from app.messages.clean_messages import FILE_NOT_FOUND
 from app.models.db.file_record import FileRecord
 from app.models.db.topic_model import TopicModel
@@ -22,21 +30,15 @@ from app.schemas.topic import (
     TopicLabelResponse,
     TopicLabelResponseData,
 )
-from app.services.s3_uploader import (
-    download_file_from_s3,
-    upload_file_to_s3,
-    delete_file_from_s3,
-)
-from app.services.topic_labeling import auto_match_labels, generate_default_labels
-from app.services.topic_modeling import apply_lda_model, estimate_best_num_topics
-
+from app.services.file_service import FileService
+from app.services.topic_labeling_service import TopicLabelingService
+from app.services.topic_modeling_service import TopicModelingService
 from app.utils.exceptions import NotFoundError, BadRequestError, ServerError
 from app.utils.response_builder import success_response
 from app.messages.topic_messages import (
     LDA_COMPLETED,
     LDA_UP_TO_DATE,
     LEMMATIZED_FILE_NOT_FOUND,
-    LEMMATIZED_COLUMN_MISSING,
     TOPIC_LABELING_COMPLETED,
     TOPIC_MODEL_NOT_FOUND,
 )
@@ -45,140 +47,126 @@ router = APIRouter(prefix="/api/topic", tags=["Topic Modeling"])
 logger = logging.getLogger(__name__)
 
 
+def _files() -> FileService:
+    """Shared FileService (S3 + CSV + Gzip)."""
+    return FileService(
+        storage=S3Storage(),
+        codec=CsvCodec(index=False),
+        compression=GzipCompression(),
+    )
+
+
 @router.post("/lda", response_model=LDATopicResponse)
 async def run_lda_topic_modeling(
     req: LDATopicRequest, db: AsyncSession = Depends(get_db)
 ):
+    """
+    Run (or reuse) LDA topic modeling.
+    - If req.num_topics is provided, we force that K.
+    - Otherwise we estimate K using the estimator (default: coherence).
+    - Results are cached/recomputed when the underlying lemmatized CSV hasn't changed
+      and K matches the existing TopicModel.
+    """
     try:
-        file_id = req.file_id
+        # 1) Load file record + guard
         record = (
-            await db.execute(select(FileRecord).filter_by(id=file_id))
+            await db.execute(select(FileRecord).filter_by(id=req.file_id))
         ).scalar_one_or_none()
-
-        if not record or not record.lemmatized_s3_key:
+        if not record:
+            raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
+        if not record.lemmatized_s3_key:
             raise NotFoundError(
                 code="LEMMATIZED_FILE_NOT_FOUND", message=LEMMATIZED_FILE_NOT_FOUND
             )
 
-        existing = (
-            await db.execute(
-                select(TopicModel).filter_by(file_id=file_id, method="LDA")
-            )
-        ).scalar_one_or_none()
-
-        if (
-            existing
-            and record.lemmatized_updated_at
-            and existing.topic_updated_at >= record.lemmatized_updated_at
-            and req.num_topics == existing.topic_count
-        ):
-            logger.info("⏩ Skipping LDA - result already up-to-date.")
-            return success_response(
-                message=LDA_UP_TO_DATE,
-                data={
-                    "file_id": file_id,
-                    "topic_model_id": existing.id,
-                    "lda_topics_s3_url": existing.s3_url,
-                    "topics": json.loads(existing.summary_json),
-                },
-            )
-
-        file_bytes = await download_file_from_s3(record.lemmatized_s3_key)
-        if record.lemmatized_s3_key.endswith(".gz"):
-            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
-                df = pd.read_csv(gz)
-        else:
-            df = pd.read_csv(BytesIO(file_bytes))
-
-        if "lemmatized_tokens" not in df.columns:
-            raise BadRequestError(
-                code="LEMMATIZED_COLUMN_MISSING", message=LEMMATIZED_COLUMN_MISSING
-            )
-
-        tokens = df["lemmatized_tokens"].astype(str)
-        num_topics = req.num_topics or estimate_best_num_topics(tokens)
-        logger.info(f"🔢 Using topic count: {num_topics}")
-
-        df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
-
-        output_buffer = BytesIO()
-        with gzip.GzipFile(fileobj=output_buffer, mode="wb") as gz:
-            df.to_csv(gz, index=False)
-        output_buffer.seek(0)
-
-        new_s3_key = f"lda/lda_topics_{uuid4()}.csv.gz"
-        s3_url = await upload_file_to_s3(
-            output_buffer, new_s3_key, content_type="application/gzip"
+        # 2) Build modeler/estimator and service
+        files = _files()
+        tm_cfg = TopicModelConfig(
+            backend="gensim",
+            passes=10,
+            topn_words=10,  # tweak as you wish
+        )
+        # If client didn’t force K, we allow estimation (narrow bounds optional)
+        est_cfg = (
+            TopicEstimationConfig(method="coherence", min_k=3, max_k=10)
+            if not req.num_topics
+            else None
         )
 
-        if existing:
-            if existing.s3_key and existing.s3_key != new_s3_key:
-                try:
-                    await delete_file_from_s3(existing.s3_key)
-                    logger.info(f"🗑️ Deleted old LDA file from S3: {existing.s3_key}")
-                except Exception as del_err:
-                    logger.warning(f"⚠️ Failed to delete old LDA file: {del_err}")
+        modeler = GensimLDAModeler(tm_cfg)
+        estimator = modeler  # GensimLDAModeler implements both interfaces
 
-            existing.s3_key = new_s3_key
-            existing.s3_url = s3_url
-            existing.topic_count = num_topics
-            existing.summary_json = json.dumps(topic_summary)
-            existing.topic_updated_at = datetime.now()
+        tm_service = TopicModelingService(
+            files=files, modeler=modeler, estimator=estimator
+        )
 
-            await db.commit()
-        else:
-            new_entry = TopicModel(
-                id=str(uuid4()),
-                file_id=file_id,
-                method="LDA",
-                topic_count=num_topics,
-                s3_key=new_s3_key,
-                s3_url=s3_url,
-                summary_json=json.dumps(topic_summary),
-                topic_updated_at=datetime.now(),
-            )
-            db.add(new_entry)
-
-            await db.commit()
+        # 3) Service decides reuse vs recompute, persists/updates TopicModel row,
+        #    uploads CSV, and returns a uniform result object.
+        tm_res = await tm_service.ensure_topics(
+            db=db,
+            record=record,
+            df_lemm=None,  # let the service load lemmatized CSV via FileService
+            cfg=tm_cfg,
+            est=est_cfg,
+            force_k=req.num_topics,  # None => estimator picks
+        )
 
         return success_response(
-            message=LDA_COMPLETED,
+            message=LDA_UP_TO_DATE if tm_res.recomputed else LDA_COMPLETED,
             data={
-                "file_id": file_id,
-                "topic_model_id": existing.id if existing else new_entry.id,
-                "lda_topics_s3_url": s3_url,
-                "topics": topic_summary,
+                "file_id": record.id,
+                "topic_model_id": tm_res.topic_model_id,
+                "lda_topics_s3_url": tm_res.url,
+                "topics": tm_res.topics,  # [{topic_id, keywords, label?...}]
+                "topic_count": tm_res.num_topics,
+                "recomputed": tm_res.recomputed,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 
-    except (NotFoundError, BadRequestError) as e:
-        raise e
+    except (NotFoundError, BadRequestError):
+        raise
     except Exception as e:
         logger.exception(f"❌ Unexpected LDA error: {e}")
         raise ServerError(code="LDA_FAILED", message="LDA topic modeling failed.")
 
 
 @router.get("/lda")
-async def get_lda_info(file_id: str = Query(...), db: AsyncSession = Depends(get_db)):
+async def get_lda_info(
+    file_id: str = Query(...),
+    num_topics: Optional[int] = Query(None, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         record = (
-            await db.execute(select(FileRecord).filter_by(id=file_id))
-        ).scalar_one_or_none()
-
+            (await db.execute(select(FileRecord).filter_by(id=file_id)))
+            .scalars()
+            .first()
+        )
         if not record:
             raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
 
-        existing = (
-            await db.execute(
-                select(TopicModel)
-                .filter_by(file_id=file_id, method="LDA")
-                .order_by(TopicModel.label_updated_at.desc())
-            )
-        ).scalar_one_or_none()
+        # Build query incrementally so we don't filter by topic_count=None by accident
+        q = select(TopicModel).where(
+            TopicModel.file_id == file_id,
+            TopicModel.method == "LDA",
+        )
+        if num_topics is not None:
+            q = q.where(TopicModel.topic_count == num_topics)
 
+        # Deterministic “latest” ordering + limit 1
+        q = q.order_by(
+            TopicModel.label_updated_at.desc().nullslast(),
+            TopicModel.topic_updated_at.desc().nullslast(),
+            TopicModel.created_at.desc().nullslast(),
+            TopicModel.id.desc(),  # tie-breaker
+        ).limit(1)
+
+        existing = (await db.execute(q)).scalars().first()
         if not existing:
             raise NotFoundError(
-                code="LDA_NOT_FOUND", message="No LDA topic model found for this file."
+                code="LDA_NOT_FOUND",
+                message="No LDA topic model found for this file.",
             )
 
         return success_response(
@@ -188,12 +176,18 @@ async def get_lda_info(file_id: str = Query(...), db: AsyncSession = Depends(get
                 "topic_model_id": existing.id,
                 "topic_count": existing.topic_count,
                 "lda_topics_s3_url": existing.s3_url,
-                "topics": json.loads(existing.summary_json),
+                "topics": json.loads(existing.summary_json or "[]"),
+                "topic_updated_at": existing.topic_updated_at.isoformat()
+                if existing.topic_updated_at
+                else None,
+                "label_updated_at": existing.label_updated_at.isoformat()
+                if existing.label_updated_at
+                else None,
             },
         )
 
-    except NotFoundError as e:
-        raise e
+    except NotFoundError:
+        raise
     except Exception as e:
         logger.exception(f"❌ Failed to fetch LDA info: {e}")
         raise ServerError(code="LDA_INFO_FAILED", message="Failed to load LDA info.")
@@ -201,7 +195,16 @@ async def get_lda_info(file_id: str = Query(...), db: AsyncSession = Depends(get
 
 @router.post("/label", response_model=TopicLabelResponse)
 async def label_topics(req: TopicLabelRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Apply topic labels to an existing TopicModel CSV on S3.
+
+    Inference rules (mutually exclusive inputs):
+      - If `label_map` is provided => Explicit labeling
+      - Else if `keywords` is provided => SBERT keyword matching
+      - Else => Default heuristic from top-k topic keywords
+    """
     try:
+        # 1) Load TopicModel
         topic_model = (
             await db.execute(select(TopicModel).filter_by(id=req.topic_model_id))
         ).scalar_one_or_none()
@@ -210,119 +213,80 @@ async def label_topics(req: TopicLabelRequest, db: AsyncSession = Depends(get_db
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
-        topic_summary = json.loads(topic_model.summary_json)
-        label_map = {}
-
-        # Check if recomputation needed
-        prev_keywords = json.loads(topic_model.label_keywords or "[]")
-        prev_label_map = json.loads(topic_model.label_map_json or "{}")
-
-        if (
-            topic_model.topic_updated_at < topic_model.label_updated_at
-            and req.keywords == (prev_keywords or None)
-            and (req.label_map or {}) == prev_label_map
-        ):
-            logger.info("⏩ Skipping labeling — inputs unchanged.")
-            return success_response(
-                message="Labels already exist and inputs haven't changed.",
-                data=TopicLabelResponseData(
-                    topic_model_id=topic_model.id,
-                    labeled_s3_url=topic_model.s3_url,
-                    columns=[
-                        "stopword_removed",
-                        "lemmatized_tokens",
-                        "topic_id",
-                        "topic_label",
-                    ],
-                    record_count=None,
-                    topics=topic_summary,
-                ),
+        # 2) Validate inputs (can't provide both)
+        if req.label_map and req.keywords:
+            raise BadRequestError(
+                code="MUTUALLY_EXCLUSIVE",
+                message="Provide either `label_map` or `keywords`, not both.",
             )
 
-        # Labeling logic
+        files = _files()
+
+        # 3) Pick labeler + config
         if req.label_map:
-            label_map = {int(k): v for k, v in req.label_map.items()}
-            for topic in topic_summary:
-                tid = int(topic["topic_id"])
-                topic["label"] = label_map.get(tid, f"Topic {tid}")
-                topic["confidence"] = None
-                topic["matched_with"] = "explicit_map"
+            cfg = TopicLabelConfig(strategy="explicit")
+            labeler = ExplicitLabeler(cfg)
+            explicit_map = {int(k): v for k, v in req.label_map.items()}
+            user_keywords = None
         elif req.keywords:
-            label_map, enriched_topics = auto_match_labels(topic_summary, req.keywords)
-            topic_summary = enriched_topics
+            cfg = TopicLabelConfig(strategy="keywords", model_name="all-MiniLM-L6-v2")
+            labeler = SBertKeywordLabeler(cfg)
+            explicit_map = None
+            user_keywords = req.keywords
         else:
-            label_map = generate_default_labels(topic_summary)
-            for topic in topic_summary:
-                tid = int(topic["topic_id"])
-                topic["label"] = label_map.get(tid, f"Topic {tid}")
-                topic["confidence"] = None
-                topic["matched_with"] = "auto_generated"
+            cfg = TopicLabelConfig(
+                strategy="default",
+                num_keywords=topic_model.topic_count,
+            )
+            labeler = DefaultHeuristicLabeler(cfg)
+            explicit_map = None
+            user_keywords = None
 
-        # Save labeled file
-        file_bytes = await download_file_from_s3(topic_model.s3_key)
-        if topic_model.s3_key.endswith(".gz"):
-            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
-                df = pd.read_csv(gz)
-        else:
-            df = pd.read_csv(BytesIO(file_bytes))
+        label_svc = TopicLabelingService(files=files, labeler=labeler)
 
-        df["topic_label"] = df["topic_id"].apply(
-            lambda x: label_map.get(int(x), f"Topic {x}")
+        # 4) Service handles:
+        #    - reuse if fresh & inputs unchanged
+        #    - otherwise label, upload *_labeled.csv.gz, update TopicModel row
+        res = await label_svc.ensure_labeled(
+            db=db,
+            topic_model=topic_model,
+            df_topics=None,  # let service load via FileService
+            explicit_map=explicit_map,  # only for explicit mode
+            user_keywords=user_keywords,  # only for keyword mode
         )
 
-        buffer = BytesIO()
-        with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
-            df.to_csv(gz, index=False)
-        buffer.seek(0)
-
-        base_key = (
-            topic_model.s3_key.replace("_labeled", "")
-            .replace(".gz", "")
-            .replace(".csv", "")
-        )
-        new_s3_key = f"{base_key}_labeled.csv.gz"
-
-        if topic_model.s3_key != new_s3_key:
-            try:
-                await delete_file_from_s3(topic_model.s3_key)
-            except Exception as del_err:
-                logger.warning(f"⚠️ Failed to delete old S3 file: {del_err}")
-
-        s3_url = await upload_file_to_s3(buffer, new_s3_key)
-
-        topic_model.s3_key = new_s3_key
-        topic_model.s3_url = s3_url
-        topic_model.summary_json = json.dumps(topic_summary)
-        topic_model.label_keywords = json.dumps(req.keywords or [])
-        topic_model.label_map_json = json.dumps(req.label_map or {})
-        topic_model.label_updated_at = datetime.now()
-        await db.commit()
-
+        # 5) Response
         return success_response(
-            message=TOPIC_LABELING_COMPLETED,
+            message=("Labels already exist and inputs haven't changed.")
+            if res.reused
+            else TOPIC_LABELING_COMPLETED,
             data=TopicLabelResponseData(
                 topic_model_id=topic_model.id,
-                labeled_s3_url=s3_url,
-                columns=df.columns.tolist(),
-                record_count=len(df),
-                topics=topic_summary,
+                labeled_s3_url=res.url,
+                columns=res.df.columns.tolist(),
+                record_count=len(res.df),
+                topics=res.topics,  # enriched summary (label/confidence/matched_with)
             ),
         )
 
-    except NotFoundError as e:
-        raise e
+    except (NotFoundError, BadRequestError):
+        raise
     except Exception as e:
         logger.exception(f"❌ Topic labeling failed: {e}")
         raise ServerError(
-            code="TOPIC_LABELING_FAILED", message="Topic labeling failed."
+            code="TOPIC_LABELING_FAILED",
+            message="Topic labeling failed.",
         )
 
 
 @router.get("/label", response_model=TopicLabelResponse)
 async def get_existing_topic_labels(
-    topic_model_id: str = Query(...),  # Required query param
+    topic_model_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Return the current labels & metadata for a TopicModel without recomputing.
+    """
     try:
         topic_model = (
             await db.execute(select(TopicModel).filter_by(id=topic_model_id))
@@ -332,7 +296,7 @@ async def get_existing_topic_labels(
                 code="TOPIC_MODEL_NOT_FOUND", message=TOPIC_MODEL_NOT_FOUND
             )
 
-        topic_summary = json.loads(topic_model.summary_json)
+        topic_summary = json.loads(topic_model.summary_json or "[]")
 
         return success_response(
             message="Topic labels retrieved successfully.",
@@ -350,8 +314,8 @@ async def get_existing_topic_labels(
             ),
         )
 
-    except NotFoundError as e:
-        raise e
+    except NotFoundError:
+        raise
     except Exception as e:
         logger.exception(f"❌ Failed to fetch topic labels: {e}")
         raise ServerError(

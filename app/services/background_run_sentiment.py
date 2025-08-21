@@ -1,156 +1,184 @@
 from datetime import datetime
-import gzip
+import ast
 import json
 import logging
-import pandas as pd
-from io import BytesIO
-
 from sqlalchemy import select
+
+from app.core.database import async_session
+from app.core.sentiment.analyzer import analyzer_for, SentimentConfig
 from app.models.db.sentiment_analysis import SentimentAnalysis
 from app.models.db.topic_model import TopicModel
-from app.services.s3_uploader import download_file_from_s3
-from app.services.sentiment_analysis import (
-    analyze_sentiment_bert,
-    analyze_sentiment_textblob,
-    analyze_sentiment_vader,
-)
-from app.core.database import async_session  # ✅ Adjust import as needed
+
+from app.services.file_service import FileService
+from app.core.file_handler.storage import S3Storage
+from app.core.file_handler.codec import CsvCodec
+from app.core.file_handler.compression import GzipCompression
 
 logger = logging.getLogger(__name__)
 
 
-def classify_sentiment(text: str, method: str) -> str:
-    if method == "vader":
-        return analyze_sentiment_vader(text)
-    elif method == "textblob":
-        return analyze_sentiment_textblob(text)
-    elif method == "bert":
-        return analyze_sentiment_bert(text)
-    else:
-        raise ValueError("Unsupported method")
+def _files() -> FileService:
+    return FileService(
+        storage=S3Storage(),
+        codec=CsvCodec(index=False),
+        compression=GzipCompression(),
+    )
 
 
-async def run_sentiment_background(_, topic_model_id: str, method: str):
+def _safe_pct(num: int, den: int) -> float:
+    return 0.0 if not den else round((num / den) * 100.0, 1)
+
+
+def _to_tokens(x):
+    if isinstance(x, list):
+        return x
+    if isinstance(x, str):
+        try:
+            v = ast.literal_eval(x)
+            return v if isinstance(v, list) else x.split()
+        except Exception:
+            return x.split()
+    return []
+
+
+async def run_sentiment_background(topic_model_id: str, method: str):
+    method = (method or "vader").lower()
+
     try:
-        # === Step 1: Retrieve data from DB ===
+        # === Step 1: fetch the pending row + topic model ===
         async with async_session() as db:
-            result = await db.execute(
-                select(SentimentAnalysis)
-                .filter_by(topic_model_id=topic_model_id, method=method)
-                .order_by(SentimentAnalysis.updated_at.desc())
+            sa = (
+                (
+                    await db.execute(
+                        select(SentimentAnalysis)
+                        .filter_by(topic_model_id=topic_model_id, method=method)
+                        .order_by(SentimentAnalysis.updated_at.desc())
+                    )
+                )
+                .scalars()
+                .first()
             )
-            sentiment_entry = result.scalars().first()
-            if not sentiment_entry:
+            if not sa:
                 logger.warning(
-                    f"No SentimentAnalysis row for {topic_model_id}, {method}"
+                    f"No SentimentAnalysis row for {topic_model_id} ({method})"
                 )
                 return
 
-            sentiment_entry.status = "processing"
-            sentiment_entry.updated_at = datetime.now()
+            sa.status = "processing"
+            sa.updated_at = datetime.now()
             await db.commit()
 
-            topic_model_result = await db.execute(
-                select(TopicModel).filter_by(id=topic_model_id)
+            tm = (
+                (await db.execute(select(TopicModel).filter_by(id=topic_model_id)))
+                .scalars()
+                .first()
             )
-            topic_model = topic_model_result.scalars().first()
-            if not topic_model:
-                sentiment_entry.status = "failed"
+
+            if not tm:
+                sa.status = "failed"
                 await db.commit()
                 logger.error(f"TopicModel {topic_model_id} not found")
                 return
 
-        # === Step 2: Heavy sentiment processing without DB ===
-        file_bytes = await download_file_from_s3(topic_model.s3_key)
-        if topic_model.s3_key.endswith(".gz"):
-            with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gz:
-                df = pd.read_csv(gz)
-        else:
-            df = pd.read_csv(BytesIO(file_bytes))
+        # === Step 2: load DF via FileService and score sentiments (no DB I/O here) ===
+        files = _files()
+        df = await files.download_df(tm.s3_key)  # transparently handles .csv vs .csv.gz
 
-        if not all(
-            col in df.columns
-            for col in ["lemmatized_tokens", "topic_id", "topic_label"]
-        ):
-            logger.error("Missing required columns in topic file")
+        required = {"lemmatized_tokens", "topic_id", "topic_label"}
+        if not required.issubset(df.columns):
+            logger.error(f"Missing required columns in topic file: need {required}")
             async with async_session() as db:
-                result = await db.execute(
-                    select(SentimentAnalysis)
-                    .filter_by(topic_model_id=topic_model_id, method=method)
-                    .order_by(SentimentAnalysis.updated_at.desc())
+                sa = (
+                    (
+                        await db.execute(
+                            select(SentimentAnalysis)
+                            .filter_by(topic_model_id=topic_model_id, method=method)
+                            .order_by(SentimentAnalysis.updated_at.desc())
+                        )
+                    )
+                    .scalars()
+                    .first()
                 )
-                sentiment_entry = result.scalars().first()
-                if sentiment_entry:
-                    sentiment_entry.status = "failed"
+                if sa:
+                    sa.status = "failed"
                     await db.commit()
             return
 
-        df["text"] = df["lemmatized_tokens"].apply(
-            lambda x: " ".join(eval(x)) if isinstance(x, str) else str(x)
-        )
-        df["sentiment"] = df["text"].apply(lambda x: classify_sentiment(x, method))
+        # Build plain text per row from tokens (robust to stringified lists)
+        toks = df["lemmatized_tokens"].apply(_to_tokens)
+        df["text"] = toks.apply(lambda ts: " ".join(map(str, ts)))
 
-        sentiment_counts = df["sentiment"].value_counts().to_dict()
+        # Use your analyzer factory (VADER/TextBlob/BERT)
+        analyzer = analyzer_for(SentimentConfig(method=method))
+        df["sentiment"] = analyzer.score_series(df["text"])
+
+        # === Step 3: aggregate ===
+        counts = df["sentiment"].value_counts().to_dict()
         total = len(df)
         overall = {
-            "positive": round((sentiment_counts.get("positive", 0) / total) * 100, 1),
-            "neutral": round((sentiment_counts.get("neutral", 0) / total) * 100, 1),
-            "negative": round((sentiment_counts.get("negative", 0) / total) * 100, 1),
+            "positive": _safe_pct(counts.get("positive", 0), total),
+            "neutral": _safe_pct(counts.get("neutral", 0), total),
+            "negative": _safe_pct(counts.get("negative", 0), total),
         }
 
-        topic_summary = json.loads(topic_model.summary_json)
+        topic_summary = json.loads(tm.summary_json or "[]")
         topic_map = {int(t["topic_id"]): t for t in topic_summary}
 
         topic_stats = []
-        for topic_id, group in df.groupby("topic_label"):
-            count = len(group)
-            tid = int(group["topic_id"].iloc[0])
-            keywords = topic_map.get(tid, {}).get("keywords", [])
-            if isinstance(keywords, str):
-                keywords = [k.strip() for k in keywords.split(",")]
+        for label, group in df.groupby("topic_label"):
+            n = len(group)
+            # pick the most frequent topic_id inside this label (safer than iloc[0])
+            tid = int(group["topic_id"].mode().iloc[0]) if n else 0
+            kws = topic_map.get(tid, {}).get("keywords", [])
+            if isinstance(kws, str):
+                kws = [k.strip() for k in kws.split(",") if k.strip()]
 
             topic_stats.append(
                 {
-                    "label": topic_id,
-                    "positive": round(
-                        (group["sentiment"] == "positive").sum() / count * 100, 1
-                    ),
-                    "neutral": round(
-                        (group["sentiment"] == "neutral").sum() / count * 100, 1
-                    ),
-                    "negative": round(
-                        (group["sentiment"] == "negative").sum() / count * 100, 1
-                    ),
-                    "keywords": keywords,
+                    "label": label,
+                    "positive": _safe_pct((group["sentiment"] == "positive").sum(), n),
+                    "neutral": _safe_pct((group["sentiment"] == "neutral").sum(), n),
+                    "negative": _safe_pct((group["sentiment"] == "negative").sum(), n),
+                    "keywords": kws,
                 }
             )
 
-        # === Step 3: Save results back to DB ===
+        # === Step 4: persist ===
         async with async_session() as db:
-            result = await db.execute(
-                select(SentimentAnalysis)
-                .filter_by(topic_model_id=topic_model_id, method=method)
-                .order_by(SentimentAnalysis.updated_at.desc())
+            sa = (
+                (
+                    await db.execute(
+                        select(SentimentAnalysis)
+                        .filter_by(topic_model_id=topic_model_id, method=method)
+                        .order_by(SentimentAnalysis.updated_at.desc())
+                    )
+                )
+                .scalars()
+                .first()
             )
-            sentiment_entry = result.scalars().first()
-            if sentiment_entry:
-                sentiment_entry.status = "done"
-                sentiment_entry.updated_at = datetime.now()
-                sentiment_entry.per_topic_json = json.dumps(topic_stats)
-                sentiment_entry.overall_positive = overall["positive"]
-                sentiment_entry.overall_neutral = overall["neutral"]
-                sentiment_entry.overall_negative = overall["negative"]
+            if sa:
+                sa.status = "done"
+                sa.updated_at = datetime.now()
+                sa.per_topic_json = json.dumps(topic_stats)
+                sa.overall_positive = overall["positive"]
+                sa.overall_neutral = overall["neutral"]
+                sa.overall_negative = overall["negative"]
                 await db.commit()
 
     except Exception as e:
         logger.exception(f"Sentiment background task failed: {e}")
         async with async_session() as db:
-            result = await db.execute(
-                select(SentimentAnalysis)
-                .filter_by(topic_model_id=topic_model_id, method=method)
-                .order_by(SentimentAnalysis.updated_at.desc())
+            sa = (
+                (
+                    await db.execute(
+                        select(SentimentAnalysis)
+                        .filter_by(topic_model_id=topic_model_id, method=method)
+                        .order_by(SentimentAnalysis.updated_at.desc())
+                    )
+                )
+                .scalars()
+                .first()
             )
-            sentiment_entry = result.scalars().first()
-            if sentiment_entry:
-                sentiment_entry.status = "failed"
+            if sa:
+                sa.status = "failed"
                 await db.commit()

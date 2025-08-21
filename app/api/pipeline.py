@@ -1,39 +1,48 @@
-# app/api/pipeline.py
-
-from datetime import datetime
-import gzip
+import math
+from app.core.database import async_session
 import json
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-import pandas as pd
-from uuid import uuid4
-from io import BytesIO
 import logging
 
 from app.core.database import get_db
+from app.core.eda.config import EDAConfig
+from app.core.eda.eda_analyzer import DefaultEDAAnalyzer
+from app.core.file_handler.codec import CsvCodec
+from app.core.file_handler.compression import GzipCompression
+from app.core.file_handler.storage import S3Storage
+from app.core.lemmatization.config import LemmatizationConfig
+from app.core.lemmatization.lemmatizer import DefaultLemmatizer
+from app.core.normalization.normalizer import DefaultTextNormalizer
+from app.core.sentiment.analyzer import analyzer_for
+from app.core.sentiment.config import SentimentConfig
+from app.core.special_char_removal.cleaner import DefaultSpecialCleaner
+from app.core.special_char_removal.config import SpecialCleanConfig
+from app.core.stopword_removal.config import StopwordConfig
+from app.core.stopword_removal.removal import DefaultStopwordRemover
+from app.core.tokenization.config import TokenizationConfig
+from app.core.tokenization.tokenizer import DefaultTokenizer
+from app.core.topic_labeling.config import TopicLabelConfig
+from app.core.topic_labeling.labelers import DefaultHeuristicLabeler
+from app.core.topic_modeling.config import TopicEstimationConfig, TopicModelConfig
+from app.core.topic_modeling.gensim_lda import GensimLDAModeler
 from app.models.db.file_record import FileRecord
 from app.models.db.topic_model import TopicModel
 from app.models.db.sentiment_analysis import SentimentAnalysis
 from app.schemas.pipeline import FullPipelineRequest
 from app.schemas.sentiment import SentimentTopicBreakdown
-from app.services.s3_uploader import (
-    generate_presigned_url,
-    download_file_from_s3,
-    save_csv_to_s3,
-)
-from app.services.preprocess import (
-    normalize_text,
-    remove_special_characters,
-    tokenize_text,
-    remove_stopwords_from_tokens,
-    lemmatize_tokens,
-)
-from app.services.topic_modeling import estimate_best_num_topics, apply_lda_model
-from app.services.topic_labeling import generate_default_labels
-from app.services.sentiment_analysis import analyze_sentiment_vader
-from app.eda.eda_analysis import EDA
+from app.services.eda_service import EDAService
+from app.services.file_service import FileService
+from app.services.lemmatization_service import LemmatizationService
+from app.services.normalization_service import NormalizationService
+from app.services.sentiment_service import SentimentService
+from app.services.special_clean_service import SpecialCleanService
+from app.services.stopword_service import StopwordService
+from app.services.tokenization_service import TokenizationService
 
+from app.services.topic_labeling_service import TopicLabelingService
+from app.services.topic_modeling_service import TopicModelingService
 from app.utils.response_builder import success_response
 from app.utils.exceptions import NotFoundError, ServerError
 from app.messages.pipeline_messages import (
@@ -42,261 +51,249 @@ from app.messages.pipeline_messages import (
     FULL_PIPELINE_SUCCESS,
     SAMPLE_DATA_URL_SUCCESS,
 )
-from app.core.config import settings
 
 
 router = APIRouter(prefix="/api/pipeline", tags=["Full Pipeline"])
 logger = logging.getLogger(__name__)
 
 
-async def run_sentiment_pipeline(file_id: str, db: AsyncSession):
-    try:
-        logger.info(
-            f"Running sentiment pipeline background task with file_id: {file_id}"
-        )
-        record = (
-            await db.execute(select(FileRecord).filter_by(id=file_id))
-        ).scalar_one_or_none()
+def _files() -> FileService:
+    return FileService(
+        storage=S3Storage(),
+        codec=CsvCodec(index=False),
+        compression=GzipCompression(),
+    )
 
-        if not record:
-            raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
 
-        existing_topic_model = (
-            (
-                await db.execute(
-                    select(TopicModel)
-                    .filter_by(file_id=file_id, method="LDA")
-                    .order_by(TopicModel.label_updated_at.desc())
-                )
+def safe_pct(numerator: int, denominator: int) -> float:
+    if not denominator:
+        return 0.0
+    v = (numerator / denominator) * 100.0
+    if not math.isfinite(v):
+        return 0.0
+    return round(v, 1)
+
+
+async def run_sentiment_pipeline(file_id: str):
+    async with async_session() as db:
+        try:
+            logger.info(
+                f"Running sentiment pipeline background task with file_id: {file_id}"
             )
-            .scalars()
-            .first()
-        )
+            # Check if file record exists
+            record = (
+                await db.execute(select(FileRecord).filter_by(id=file_id))
+            ).scalar_one_or_none()
 
-        if existing_topic_model:
-            existing_sentiment = (
+            if not record:
+                raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
+
+            # Check if topic model exists
+            existing_topic_model = (
                 (
                     await db.execute(
-                        select(SentimentAnalysis)
-                        .filter_by(
-                            topic_model_id=existing_topic_model.id, method="vader"
-                        )
-                        .order_by(SentimentAnalysis.updated_at.desc())
+                        select(TopicModel)
+                        .filter_by(file_id=file_id, method="LDA")
+                        .order_by(TopicModel.label_updated_at.desc())
                     )
                 )
                 .scalars()
                 .first()
             )
 
-            if (
-                existing_sentiment
-                and record.lemmatized_updated_at
-                and existing_sentiment.updated_at >= record.lemmatized_updated_at
-            ):
-                logger.info("⏩ Skipping pipeline — sentiment already up-to-date.")
-                per_topic = [
-                    SentimentTopicBreakdown(**t)
-                    for t in json.loads(existing_sentiment.per_topic_json or "[]")
-                ]
-                return success_response(
-                    message="Sentiment already computed. Reusing existing result.",
-                    data={
-                        "overall": {
-                            "positive": existing_sentiment.overall_positive,
-                            "neutral": existing_sentiment.overall_neutral,
-                            "negative": existing_sentiment.overall_negative,
+            # If topic model exists, check for existing sentiment analysis
+            if existing_topic_model:
+                existing_sentiment = (
+                    (
+                        await db.execute(
+                            select(SentimentAnalysis)
+                            .filter_by(
+                                topic_model_id=existing_topic_model.id, method="vader"
+                            )
+                            .order_by(SentimentAnalysis.updated_at.desc())
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+
+                if (
+                    existing_sentiment
+                    and record.lemmatized_updated_at
+                    and existing_sentiment.updated_at >= record.lemmatized_updated_at
+                ):
+                    logger.info("⏩ Skipping pipeline — sentiment already up-to-date.")
+                    per_topic = [
+                        SentimentTopicBreakdown(**t)
+                        for t in json.loads(existing_sentiment.per_topic_json or "[]")
+                    ]
+                    return success_response(
+                        message="Sentiment already computed. Reusing existing result.",
+                        data={
+                            "overall": {
+                                "positive": existing_sentiment.overall_positive,
+                                "neutral": existing_sentiment.overall_neutral,
+                                "negative": existing_sentiment.overall_negative,
+                            },
+                            "per_topic": [t.model_dump() for t in per_topic],
                         },
-                        "per_topic": [t.model_dump() for t in per_topic],
-                    },
-                )
+                    )
 
-        original_bytes = await download_file_from_s3(record.s3_key)
-        if record.s3_key.endswith(".gz"):
-            with gzip.GzipFile(fileobj=BytesIO(original_bytes)) as gz:
-                df = pd.read_csv(gz)
-        else:
-            df = pd.read_csv(BytesIO(original_bytes))
-
-        df["normalized_review"] = df["review"].dropna().apply(normalize_text)
-
-        norm_key, norm_url = await save_csv_to_s3(
-            df, "normalization", suffix="normalized"
-        )
-        record.normalized_s3_key = norm_key
-        record.normalized_s3_url = norm_url
-        record.normalized_updated_at = datetime.now()
-
-        cleaned_rows, removed_chars = [], []
-        for row in df["normalized_review"].dropna():
-            cleaned, removed = remove_special_characters(row, True, True, True)
-            cleaned_rows.append(cleaned)
-            removed_chars.extend(removed)
-        df["special_cleaned"] = cleaned_rows
-
-        clean_key, clean_url = await save_csv_to_s3(
-            df, "cleaned", suffix="special_cleaned"
-        )
-        record.special_cleaned_s3_key = clean_key
-        record.special_cleaned_s3_url = clean_url
-        record.special_cleaned_flags = json.dumps(
-            {"remove_special": True, "remove_numbers": True, "remove_emoji": True}
-        )
-        record.special_cleaned_removed = json.dumps(list(set(removed_chars)))
-        record.special_cleaned_updated_at = datetime.now()
-
-        df["tokens"] = df["special_cleaned"].dropna().apply(tokenize_text)
-
-        token_key, token_url = await save_csv_to_s3(df, "tokenization", suffix="tokens")
-        record.tokenized_s3_key = token_key
-        record.tokenized_s3_url = token_url
-        record.tokenized_updated_at = datetime.now()
-
-        df["stopword_removed"] = df["tokens"].apply(
-            lambda toks: remove_stopwords_from_tokens(toks)["cleaned_tokens"]
-        )
-
-        stopword_key, stopword_url = await save_csv_to_s3(
-            df, "stopwords", suffix="stopword_removed"
-        )
-        record.stopword_s3_key = stopword_key
-        record.stopword_s3_url = stopword_url
-        record.stopword_updated_at = datetime.now()
-
-        df["lemmatized_tokens"] = df["stopword_removed"].apply(
-            lambda toks: lemmatize_tokens(toks)["lemmatized_tokens"]
-        )
-
-        lemma_key, lemma_url = await save_csv_to_s3(
-            df, "lemmatization", suffix="lemmatized"
-        )
-        record.lemmatized_s3_key = lemma_key
-        record.lemmatized_s3_url = lemma_url
-        record.lemmatized_updated_at = datetime.now()
-
-        await db.commit()
-
-        eda = EDA(df=df, file_id=file_id)
-        eda_result = eda.run_eda()
-
-        record.eda_analysis = json.dumps(eda_result)
-        record.eda_updated_at = datetime.now()
-        await db.commit()
-
-        tokens = df["lemmatized_tokens"].astype(str)
-        num_topics = estimate_best_num_topics(tokens)
-        df["topic_id"], topic_summary = apply_lda_model(tokens, num_topics=num_topics)
-
-        # ✅ Assign default topic labels
-        label_map = generate_default_labels(topic_summary)
-        df["topic_label"] = df["topic_id"].apply(
-            lambda x: label_map.get(int(x), f"Topic {x}")
-        )
-        for topic in topic_summary:
-            tid = int(topic["topic_id"])
-            topic["label"] = label_map.get(tid)
-            topic.setdefault("keywords", [])
-            topic["matched_with"] = "auto_generated"
-            topic["confidence"] = None
-
-        # ✅ Save topic-labeled CSV to S3
-        labeled_key, labeled_url = await save_csv_to_s3(
-            df, prefix="lda", suffix="lda_topics"
-        )
-
-        lda_entry = TopicModel(
-            id=str(uuid4()),
-            file_id=file_id,
-            method="LDA",
-            topic_count=num_topics,
-            s3_key=labeled_key,
-            s3_url=labeled_url,
-            summary_json=json.dumps(topic_summary),
-            label_map_json=json.dumps(label_map),
-            label_keywords=json.dumps([]),
-            topic_updated_at=datetime.now(),
-            label_updated_at=datetime.now(),
-        )
-        db.add(lda_entry)
-        await db.commit()
-
-        df["text"] = df["lemmatized_tokens"].apply(
-            lambda x: " ".join(x) if isinstance(x, list) else " ".join(eval(x))
-        )
-        df["sentiment"] = df["text"].apply(analyze_sentiment_vader)
-
-        sentiment_counts = df["sentiment"].value_counts().to_dict()
-        total = len(df)
-        overall = {
-            "positive": round((sentiment_counts.get("positive", 0) / total) * 100, 1),
-            "neutral": round((sentiment_counts.get("neutral", 0) / total) * 100, 1),
-            "negative": round((sentiment_counts.get("negative", 0) / total) * 100, 1),
-        }
-
-        per_topic = []
-        for topic in topic_summary:
-            label = topic["label"]
-            keywords = (
-                topic["keywords"].split(", ")
-                if isinstance(topic["keywords"], str)
-                else topic["keywords"]
+            # Otherwise, Process normal flow:
+            # Data Cleaning -> EDA -> Pick K Topic & Topic Modeling -> Topic Labeling -> Sentiment Analysis
+            files = FileService(
+                storage=S3Storage(),
+                codec=CsvCodec(index=False),
+                compression=GzipCompression(),
             )
 
-            group = df[df["topic_label"] == label]
-            count = len(group)
-            per_topic.append(
-                SentimentTopicBreakdown(
-                    label=label,
-                    keywords=keywords,
-                    positive=round(
-                        (group["sentiment"] == "positive").sum() / count * 100, 1
-                    ),
-                    neutral=round(
-                        (group["sentiment"] == "neutral").sum() / count * 100, 1
-                    ),
-                    negative=round(
-                        (group["sentiment"] == "negative").sum() / count * 100, 1
-                    ),
+            # Step A.1: Normalization
+            normalizer = DefaultTextNormalizer()
+            norm_service = NormalizationService(files, normalizer)
+
+            norm_result = await norm_service.ensure_normalized(db=db, record=record)
+            df = norm_result.df  # ['review', 'normalized_review']
+
+            # Step A.2: Special characters
+            cleaner = DefaultSpecialCleaner(
+                SpecialCleanConfig(
+                    remove_special=True, remove_numbers=True, remove_emoji=True
                 )
             )
+            special_service = SpecialCleanService(files, cleaner)
 
-        sentiment_entry = SentimentAnalysis(
-            id=str(uuid4()),
-            topic_model_id=lda_entry.id,
-            method="vader",
-            overall_positive=overall["positive"],
-            overall_neutral=overall["neutral"],
-            overall_negative=overall["negative"],
-            per_topic_json=json.dumps([t.model_dump() for t in per_topic]),
-            updated_at=datetime.now(),
-            status="done",
-        )
-        db.add(sentiment_entry)
-        await db.commit()
+            special_result = await special_service.ensure_special_cleaned(
+                db=db,
+                record=record,
+                df_norm=df,  # pass in-memory df to avoid S3 read
+                override_flags=None,  # or {"remove_special": True, ...}
+            )
+            df = special_result.df  # ['normalized_review', 'special_cleaned']
 
-        logger.info(f"Background sentiment task completed: {file_id}")
+            # Step A.3: Tokenization
+            tokenizer = DefaultTokenizer(TokenizationConfig(method="wordpunct"))
+            tok_service = TokenizationService(files, tokenizer)
 
-        return success_response(
-            message=FULL_PIPELINE_SUCCESS,
-            data={
-                "status": "done",
-                "overall": overall,
-                "per_topic": [t.model_dump() for t in per_topic],
-            },
-        )
+            tok_result = await tok_service.ensure_tokenized(
+                db=db,
+                record=record,
+                df_clean=df,
+                override_config=None,
+            )
+            df = tok_result.df  # columns: ['special_cleaned', 'tokens']
 
-    except Exception as e:
-        logger.exception(f"❌ Full pipeline failed in background: {e}")
+            # Step A.4: Stopword Removal
+            remover = DefaultStopwordRemover(
+                StopwordConfig(
+                    language="english",
+                    custom_stopwords=set(),  # e.g., {"hotel","room"} for domain noise
+                    exclude_stopwords=set(),  # keep these even if they’re stopwords
+                    lowercase=True,
+                    preserve_negations=True,
+                )
+            )
+            stop_service = StopwordService(files, remover)
+
+            stop_result = await stop_service.ensure_stopwords_removed(
+                db=db,
+                record=record,
+                df_tokens=df,
+            )
+            df = stop_result.df  # columns: ['tokens', 'stopword_removed']
+
+            # Step A.5: Lemmatization
+            lemmatizer = DefaultLemmatizer(
+                LemmatizationConfig(use_pos_tagging=True, lowercase=False)
+            )
+            lem_service = LemmatizationService(files, lemmatizer)
+
+            lem_result = await lem_service.ensure_lemmatized(
+                db=db, record=record, df_stop=stop_result.df
+            )
+            df = lem_result.df  # ['stopword_removed', 'lemmatized_tokens']
+
+            # Step B.1: Exploratory Data Analysis
+            eda_analyzer = DefaultEDAAnalyzer(
+                EDAConfig(
+                    text_column="lemmatized_tokens", top_words=100, ngram_top_k=20
+                )
+            )
+            eda_service = EDAService(analyzer=eda_analyzer)
+
+            await eda_service.ensure_eda(
+                db=db,
+                record=record,
+                df_lemm=lem_result.df,  # <- pass in-memory DF from the lemmatization step
+            )
+
+            # Step C.1: Pick K Topic & Topic modeling
+            tm_cfg = TopicModelConfig(backend="gensim", passes=10, topn_words=10)
+            est_cfg = TopicEstimationConfig(method="coherence", min_k=3, max_k=5)
+
+            modeler = GensimLDAModeler(tm_cfg)
+            estimator = modeler
+
+            tm_service = TopicModelingService(
+                files=files, modeler=modeler, estimator=estimator
+            )
+            tm_res = await tm_service.ensure_topics(
+                db=db,
+                record=record,
+                df_lemm=lem_result.df,
+                cfg=tm_cfg,
+                est=est_cfg,
+                force_k=3,  # or force_k=your_fixed_number
+            )
+            df = tm_res.df  # has ['topic_id','topic_label']
+
+            # Step D.1: Assign Default Topic Labels
+            label_svc = TopicLabelingService(
+                files=files,
+                labeler=DefaultHeuristicLabeler(
+                    TopicLabelConfig(strategy="default", num_keywords=3)
+                ),
+            )
+
+            lda_entry = (
+                await db.execute(select(TopicModel).filter_by(id=tm_res.topic_model_id))
+            ).scalar_one()
+
+            label_res = await label_svc.ensure_labeled(
+                db=db, topic_model=lda_entry, df_topics=df
+            )
+            df = label_res.df  # contains 'topic_label'
+
+            # Step E.1: Sentiment Analysis
+            sent_svc = SentimentService(
+                files=files,
+                analyzer=analyzer_for("vader"),
+                cfg=SentimentConfig(method="vader"),
+            )
+            sent_res = await sent_svc.ensure_sentiment(
+                db=db, topic_model=lda_entry, df_labeled=df
+            )
+
+            overall = sent_res.overall
+            per_topic = [t.model_dump() for t in sent_res.per_topic]
+
+            logger.info(f"Background sentiment task completed: {file_id}")
+
+            return success_response(
+                message=FULL_PIPELINE_SUCCESS,
+                data={"status": "done", "overall": overall, "per_topic": per_topic},
+            )
+
+        except Exception as e:
+            logger.exception(f"❌ Full pipeline failed in background: {e}")
 
 
 @router.post("/sentiment-analysis")
 async def run_full_pipeline(
     req: FullPipelineRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
 ):
     try:
-        # ✅ Enqueue background task
-        background_tasks.add_task(run_sentiment_pipeline, req.file_id, db)
+        background_tasks.add_task(run_sentiment_pipeline, req.file_id)
 
         return {
             "message": "✅ Pipeline started in background.",
@@ -390,18 +387,36 @@ async def get_result(file_id: str = Query(...), db: AsyncSession = Depends(get_d
 
 
 @router.get("/sample-data-url")
-async def get_sample_data_url(file_id: str = Query(...)):
+async def get_sample_data_url(
+    file_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
     try:
-        s3_key = f"user-data/{file_id}.csv.gz"
-        s3_url = await generate_presigned_url(
-            bucket=settings.AWS_S3_BUCKET_NAME,
-            key=s3_key,
-        )
+        # Look up the record so we use the real stored key
+        result = await db.execute(select(FileRecord).filter_by(id=file_id))
+        record = result.scalars().first()
+        if not record:
+            raise NotFoundError(code="FILE_NOT_FOUND", message="File not found.")
+
+        if not record.s3_key:
+            raise NotFoundError(
+                code="SOURCE_S3_KEY_MISSING",
+                message="Source file key is missing for this record.",
+            )
+
+        files = _files()
+        s3_url = await files.presigned_url(record.s3_key, expires_in=6000)
+
         return success_response(
-            message=SAMPLE_DATA_URL_SUCCESS, data={"s3_url": s3_url}
+            message=SAMPLE_DATA_URL_SUCCESS,
+            data={"s3_url": s3_url},
         )
+
+    except NotFoundError:
+        raise
     except Exception as e:
         logger.exception(f"❌ Failed to generate sample data URL: {e}")
         raise ServerError(
-            code="SAMPLE_DATA_URL_FAILED", message="Failed to generate sample data URL."
+            code="SAMPLE_DATA_URL_FAILED",
+            message="Failed to generate sample data URL.",
         )

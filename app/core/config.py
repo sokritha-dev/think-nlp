@@ -1,8 +1,6 @@
 # app/core/config.py
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import os
-from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -31,8 +29,12 @@ class Settings(BaseSettings):
     MAX_SIZE_FILE_UPLOAD: int | None = None
 
     FRONTEND_ORIGIN: str | None = None
+    BETTERSTACK_OPENTELEMETRY_API_KEY: str | None = None
     BETTERSTACK_API_KEY: str | None = None
     BETTERSTACK_HOST: str | None = None
+
+    OTEL_SERVICE_NAME: str | None = None
+    OTEL_SERVICE_VERSION: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=None,
