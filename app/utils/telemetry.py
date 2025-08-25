@@ -22,6 +22,9 @@ from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from app.core.config import settings
+import logging
+
+logger = logging.getLogger("app.obs")
 
 
 @dataclass
@@ -80,25 +83,28 @@ def _build_exporters(enable_metrics: bool):
     if _cfg.env.lower() == "production" and _cfg.betterstack_host:
         traces_ep = _join(_cfg.betterstack_host, "/v1/traces")
         metrics_ep = _join(_cfg.betterstack_host, "/metrics")
-        headers = (
-            {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
-            if _cfg.betterstack_api_key
-            else {}
-        )
+        headers = {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
         span_exp = OTLPSpanExporter(endpoint=traces_ep, headers=headers)
         metric_exp = (
             OTLPMetricExporter(endpoint=metrics_ep, headers=headers)
             if enable_metrics
             else None
         )
+        logger.info("Prod OTEL traces_ep=%s metrics_ep=%s", traces_ep, metrics_ep)
         return span_exp, metric_exp
 
     # Dev/staging → local/remote collector via OTEL_EXPORTER_OTLP_ENDPOINT
     base = (_cfg.betterstack_host or "http://localhost:4318").rstrip("/")
     traces_ep = _join(base, "/v1/traces")
     metrics_ep = _join(base, "/metrics")
+    headers = {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
     span_exp = OTLPSpanExporter(endpoint=traces_ep)
-    metric_exp = OTLPMetricExporter(endpoint=metrics_ep) if enable_metrics else None
+    metric_exp = (
+        OTLPMetricExporter(endpoint=metrics_ep, headers=headers)
+        if enable_metrics
+        else None
+    )
+    logger.info("Dev OTEL traces_ep=%s metrics_ep=%s", traces_ep, metrics_ep)
     return span_exp, metric_exp
 
 
