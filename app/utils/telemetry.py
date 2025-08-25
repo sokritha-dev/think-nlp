@@ -32,10 +32,6 @@ class ObsConfig:
     sample_ratio: str | float = settings.OTEL_SAMPLE_RATIO
     enable_metrics: str | bool = settings.OTEL_ENABLE_METRICS
 
-    # Only these two are needed:
-    dev_otlp_base: Optional[str] = (
-        settings.OTEL_EXPORTER_OTLP_ENDPOINT
-    )  # e.g. http://otel-collector:4318
     betterstack_host: Optional[str] = (
         settings.BETTERSTACK_HOST
     )  # e.g. https://in-otel.betterstack.com
@@ -98,7 +94,7 @@ def _build_exporters(enable_metrics: bool):
         return span_exp, metric_exp
 
     # Dev/staging → local/remote collector via OTEL_EXPORTER_OTLP_ENDPOINT
-    base = (_cfg.dev_otlp_base or "http://localhost:4318").rstrip("/")
+    base = (_cfg.betterstack_host or "http://localhost:4318").rstrip("/")
     traces_ep = _join(base, "/v1/traces")
     metrics_ep = _join(base, "/metrics")
     span_exp = OTLPSpanExporter(endpoint=traces_ep)
