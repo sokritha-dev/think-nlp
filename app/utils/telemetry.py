@@ -39,7 +39,7 @@ class ObsConfig:
     betterstack_host: Optional[str] = (
         settings.BETTERSTACK_HOST
     )  # e.g. https://in-otel.betterstack.com
-    betterstack_api_key: Optional[str] = settings.BETTERSTACK_OPENTELEMETRY_API_KEY
+    betterstack_api_key: Optional[str] = settings.BETTERSTACK_API_KEY
 
 
 _cfg = ObsConfig()
