@@ -74,6 +74,10 @@ jobs:
           MAX_SIZE_FILE_UPLOAD: ${{ secrets.MAX_SIZE_FILE_UPLOAD }}
           BETTERSTACK_API_KEY: ${{ secrets.BETTERSTACK_API_KEY }}
           BETTERSTACK_HOST: ${{ secrets.BETTERSTACK_HOST }}
+          OTEL_SERVICE_NAME: ${{ secrets.OTEL_SERVICE_NAME }}
+          OTEL_SERVICE_VERSION: ${{ secrets.OTEL_SERVICE_VERSION }}
+          OTEL_SAMPLE_RATIO: ${{ secrets.OTEL_SAMPLE_RATIO }}
+          OTEL_ENABLE_METRICS: ${{ secrets.OTEL_ENABLE_METRICS }}
           FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         run: |
           kubectl create secret generic app-secret \
@@ -85,6 +89,10 @@ jobs:
             --from-literal=MAX_SIZE_FILE_UPLOAD=$MAX_SIZE_FILE_UPLOAD \
             --from-literal=BETTERSTACK_API_KEY=$BETTERSTACK_API_KEY \
             --from-literal=BETTERSTACK_HOST=$BETTERSTACK_HOST \
+            --from-literal=OTEL_SERVICE_NAME=$OTEL_SERVICE_NAME \
+            --from-literal=OTEL_SERVICE_VERSION=$OTEL_SERVICE_VERSION \
+            --from-literal=OTEL_SAMPLE_RATIO=$OTEL_SAMPLE_RATIO \
+            --from-literal=OTEL_ENABLE_METRICS=$OTEL_ENABLE_METRICS \
             --from-literal=FRONTEND_ORIGIN=$FRONTEND_ORIGIN \
             --dry-run=client -o yaml | kubectl apply -f -
 

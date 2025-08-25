@@ -12,8 +12,8 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 0           # Prevent 3rd pod during update
-      maxUnavailable: 1     # Allow 1 pod to go down before replacing
+      maxSurge: 0           # never create an extra pod
+      maxUnavailable: 1     # ok to take the single pod down during update
   template:
     metadata:
       labels:
@@ -97,6 +97,26 @@ spec:
                 secretKeyRef:
                   name: app-secret
                   key: BETTERSTACK_HOST
+            - name: OTEL_SERVICE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: OTEL_SERVICE_NAME
+            - name: OTEL_SERVICE_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: OTEL_SERVICE_VERSION
+            - name: OTEL_SAMPLE_RATIO
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: OTEL_SAMPLE_RATIO
+            - name: OTEL_ENABLE_METRICS
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: OTEL_ENABLE_METRICS
             - name: ENV
               valueFrom:
                 secretKeyRef:

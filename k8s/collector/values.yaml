@@ -1,0 +1,111 @@
+# Default values for better-stack-collector
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Collector configuration
+collector:
+  image:
+    repository: betterstack/collector
+    tag: latest
+    pullPolicy: Always
+
+  # Environment variables
+  env:
+    COLLECTOR_SECRET: "b7vAzvviYeq9MsfewRPnHGw7vRwF3U3a"  # Required: Your collector secret
+    BASE_URL: "https://telemetry.betterstack.com"
+    CLUSTER_COLLECTOR: ""
+    VECTOR_LOG_FORMAT: "json"
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Affinity
+  affinity: {}
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 34320
+
+  # Port for internal OTLP communication
+  otlpPort: 34320
+
+# Beyla configuration for eBPF tracing
+beyla:
+  enabled: false
+
+  image:
+    repository: betterstack/collector-beyla
+    tag: latest
+    pullPolicy: Always
+
+  # Environment variables
+  env:
+    OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+    BEYLA_OPEN_PORT: "1-65535"
+    BEYLA_EXCLUDE_OTEL_INSTRUMENTED_SERVICES: "false"
+    BEYLA_BPF_CONTEXT_PROPAGATION: "all"
+    BEYLA_BPF_TRACK_REQUEST_HEADERS: "true"
+    BEYLA_KUBE_METADATA_ENABLE: "true"
+    BEYLA_METRICS_INTERVAL: "15s"
+    BEYLA_NETWORK_METRICS: "false"
+
+  # Docker probe configuration
+  dockerprobe:
+    enabled: false
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 250m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+# RBAC configuration
+rbac:
+  # Create service account
+  create: true
+  # Service account name
+  serviceAccountName: better-stack-collector
+
+# Security context for pods
+securityContext:
+  # For collector deployment
+  collector:
+    runAsNonRoot: false
+    runAsUser: 0
+    fsGroup: 0
+
+  # For Beyla daemonset (requires privileged access)
+  beyla:
+    privileged: true
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Global labels to add to all resources
+commonLabels: {}
+
+# Global annotations to add to all resources
+commonAnnotations: {}
+
+# Shared volumes configuration
+volumes:
+  # Docker metadata volume shared between collector and beyla
+  dockerMetadata:
+    # Mount path for the docker metadata volume
+    mountPath: /enrichment

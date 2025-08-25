@@ -51,6 +51,7 @@ from app.messages.pipeline_messages import (
     FULL_PIPELINE_SUCCESS,
     SAMPLE_DATA_URL_SUCCESS,
 )
+from app.utils.telemetry import astep, mark_reuse
 
 
 router = APIRouter(prefix="/api/pipeline", tags=["Full Pipeline"])
@@ -81,41 +82,49 @@ async def run_sentiment_pipeline(file_id: str):
                 f"Running sentiment pipeline background task with file_id: {file_id}"
             )
             # Check if file record exists
-            record = (
-                await db.execute(select(FileRecord).filter_by(id=file_id))
-            ).scalar_one_or_none()
+            async with astep("pipeline.db.load_file_record", file_id=file_id):
+                record = (
+                    await db.execute(select(FileRecord).filter_by(id=file_id))
+                ).scalar_one_or_none()
 
             if not record:
                 raise NotFoundError(code="FILE_NOT_FOUND", message=FILE_NOT_FOUND)
 
             # Check if topic model exists
-            existing_topic_model = (
-                (
-                    await db.execute(
-                        select(TopicModel)
-                        .filter_by(file_id=file_id, method="LDA")
-                        .order_by(TopicModel.label_updated_at.desc())
-                    )
-                )
-                .scalars()
-                .first()
-            )
-
-            # If topic model exists, check for existing sentiment analysis
-            if existing_topic_model:
-                existing_sentiment = (
+            async with astep("pipeline.db.find_existing_topic_model", file_id=file_id):
+                existing_topic_model = (
                     (
                         await db.execute(
-                            select(SentimentAnalysis)
-                            .filter_by(
-                                topic_model_id=existing_topic_model.id, method="vader"
-                            )
-                            .order_by(SentimentAnalysis.updated_at.desc())
+                            select(TopicModel)
+                            .filter_by(file_id=file_id, method="LDA")
+                            .order_by(TopicModel.label_updated_at.desc())
                         )
                     )
                     .scalars()
                     .first()
                 )
+
+            # If topic model exists, check for existing sentiment analysis
+            if existing_topic_model:
+                async with astep(
+                    "pipeline.db.find_existing_sentiment",
+                    topic_model_id=existing_topic_model.id,
+                    method="vader",
+                ):
+                    existing_sentiment = (
+                        (
+                            await db.execute(
+                                select(SentimentAnalysis)
+                                .filter_by(
+                                    topic_model_id=existing_topic_model.id,
+                                    method="vader",
+                                )
+                                .order_by(SentimentAnalysis.updated_at.desc())
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
 
                 if (
                     existing_sentiment
@@ -123,6 +132,7 @@ async def run_sentiment_pipeline(file_id: str):
                     and existing_sentiment.updated_at >= record.lemmatized_updated_at
                 ):
                     logger.info("⏩ Skipping pipeline — sentiment already up-to-date.")
+                    mark_reuse("pipeline.sentiment")
                     per_topic = [
                         SentimentTopicBreakdown(**t)
                         for t in json.loads(existing_sentiment.per_topic_json or "[]")
@@ -151,8 +161,9 @@ async def run_sentiment_pipeline(file_id: str):
             normalizer = DefaultTextNormalizer()
             norm_service = NormalizationService(files, normalizer)
 
-            norm_result = await norm_service.ensure_normalized(db=db, record=record)
-            df = norm_result.df  # ['review', 'normalized_review']
+            async with astep("pipeline.normalize"):
+                norm_result = await norm_service.ensure_normalized(db=db, record=record)
+                df = norm_result.df
 
             # Step A.2: Special characters
             cleaner = DefaultSpecialCleaner(
@@ -162,25 +173,27 @@ async def run_sentiment_pipeline(file_id: str):
             )
             special_service = SpecialCleanService(files, cleaner)
 
-            special_result = await special_service.ensure_special_cleaned(
-                db=db,
-                record=record,
-                df_norm=df,  # pass in-memory df to avoid S3 read
-                override_flags=None,  # or {"remove_special": True, ...}
-            )
-            df = special_result.df  # ['normalized_review', 'special_cleaned']
+            async with astep("pipeline.special_clean"):
+                special_result = await special_service.ensure_special_cleaned(
+                    db=db,
+                    record=record,
+                    df_norm=df,  # pass in-memory df to avoid S3 read
+                    override_flags=None,  # or {"remove_special": True, ...}
+                )
+                df = special_result.df  # ['normalized_review', 'special_cleaned']
 
             # Step A.3: Tokenization
             tokenizer = DefaultTokenizer(TokenizationConfig(method="wordpunct"))
             tok_service = TokenizationService(files, tokenizer)
 
-            tok_result = await tok_service.ensure_tokenized(
-                db=db,
-                record=record,
-                df_clean=df,
-                override_config=None,
-            )
-            df = tok_result.df  # columns: ['special_cleaned', 'tokens']
+            async with astep("pipeline.tokenize"):
+                tok_result = await tok_service.ensure_tokenized(
+                    db=db,
+                    record=record,
+                    df_clean=df,
+                    override_config=None,
+                )
+                df = tok_result.df  # columns: ['special_cleaned', 'tokens']
 
             # Step A.4: Stopword Removal
             remover = DefaultStopwordRemover(
@@ -194,12 +207,13 @@ async def run_sentiment_pipeline(file_id: str):
             )
             stop_service = StopwordService(files, remover)
 
-            stop_result = await stop_service.ensure_stopwords_removed(
-                db=db,
-                record=record,
-                df_tokens=df,
-            )
-            df = stop_result.df  # columns: ['tokens', 'stopword_removed']
+            async with astep("pipeline.stopword_remove"):
+                stop_result = await stop_service.ensure_stopwords_removed(
+                    db=db,
+                    record=record,
+                    df_tokens=df,
+                )
+                df = stop_result.df  # columns: ['tokens', 'stopword_removed']
 
             # Step A.5: Lemmatization
             lemmatizer = DefaultLemmatizer(
@@ -207,10 +221,11 @@ async def run_sentiment_pipeline(file_id: str):
             )
             lem_service = LemmatizationService(files, lemmatizer)
 
-            lem_result = await lem_service.ensure_lemmatized(
-                db=db, record=record, df_stop=stop_result.df
-            )
-            df = lem_result.df  # ['stopword_removed', 'lemmatized_tokens']
+            async with astep("pipeline.lemmatize"):
+                lem_result = await lem_service.ensure_lemmatized(
+                    db=db, record=record, df_stop=stop_result.df
+                )
+                df = lem_result.df  # ['stopword_removed', 'lemmatized_tokens']
 
             # Step B.1: Exploratory Data Analysis
             eda_analyzer = DefaultEDAAnalyzer(
@@ -220,11 +235,12 @@ async def run_sentiment_pipeline(file_id: str):
             )
             eda_service = EDAService(analyzer=eda_analyzer)
 
-            await eda_service.ensure_eda(
-                db=db,
-                record=record,
-                df_lemm=lem_result.df,  # <- pass in-memory DF from the lemmatization step
-            )
+            async with astep("pipeline.eda"):
+                await eda_service.ensure_eda(
+                    db=db,
+                    record=record,
+                    df_lemm=lem_result.df,  # <- pass in-memory DF from the lemmatization step
+                )
 
             # Step C.1: Pick K Topic & Topic modeling
             tm_cfg = TopicModelConfig(backend="gensim", passes=10, topn_words=10)
@@ -236,15 +252,17 @@ async def run_sentiment_pipeline(file_id: str):
             tm_service = TopicModelingService(
                 files=files, modeler=modeler, estimator=estimator
             )
-            tm_res = await tm_service.ensure_topics(
-                db=db,
-                record=record,
-                df_lemm=lem_result.df,
-                cfg=tm_cfg,
-                est=est_cfg,
-                force_k=3,  # or force_k=your_fixed_number
-            )
-            df = tm_res.df  # has ['topic_id','topic_label']
+
+            async with astep("pipeline.topic_modeling", k=3, backend="gensim"):
+                tm_res = await tm_service.ensure_topics(
+                    db=db,
+                    record=record,
+                    df_lemm=lem_result.df,
+                    cfg=tm_cfg,
+                    est=est_cfg,
+                    force_k=3,  # or force_k=your_fixed_number
+                )
+                df = tm_res.df  # has ['topic_id','topic_label']
 
             # Step D.1: Assign Default Topic Labels
             label_svc = TopicLabelingService(
@@ -254,14 +272,17 @@ async def run_sentiment_pipeline(file_id: str):
                 ),
             )
 
-            lda_entry = (
-                await db.execute(select(TopicModel).filter_by(id=tm_res.topic_model_id))
-            ).scalar_one()
+            async with astep("pipeline.topic_labeling"):
+                lda_entry = (
+                    await db.execute(
+                        select(TopicModel).filter_by(id=tm_res.topic_model_id)
+                    )
+                ).scalar_one()
 
-            label_res = await label_svc.ensure_labeled(
-                db=db, topic_model=lda_entry, df_topics=df
-            )
-            df = label_res.df  # contains 'topic_label'
+                label_res = await label_svc.ensure_labeled(
+                    db=db, topic_model=lda_entry, df_topics=df
+                )
+                df = label_res.df  # contains 'topic_label'
 
             # Step E.1: Sentiment Analysis
             sent_svc = SentimentService(
@@ -269,9 +290,11 @@ async def run_sentiment_pipeline(file_id: str):
                 analyzer=analyzer_for("vader"),
                 cfg=SentimentConfig(method="vader"),
             )
-            sent_res = await sent_svc.ensure_sentiment(
-                db=db, topic_model=lda_entry, df_labeled=df
-            )
+
+            async with astep("pipeline.sentiment", method="vader"):
+                sent_res = await sent_svc.ensure_sentiment(
+                    db=db, topic_model=lda_entry, df_labeled=df
+                )
 
             overall = sent_res.overall
             per_topic = [t.model_dump() for t in sent_res.per_topic]
@@ -293,7 +316,8 @@ async def run_full_pipeline(
     background_tasks: BackgroundTasks,
 ):
     try:
-        background_tasks.add_task(run_sentiment_pipeline, req.file_id)
+        async with astep("pipeline.enqueue", file_id=req.file_id):
+            background_tasks.add_task(run_sentiment_pipeline, req.file_id)
 
         return {
             "message": "✅ Pipeline started in background.",

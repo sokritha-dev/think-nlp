@@ -7,10 +7,10 @@ class Settings(BaseSettings):
     ENV: str = "local"
 
     SERVICE_NAME: str | None = None
-    DOCKERHUB_USERNAME: str | None = None
-    DROPLET_USER: str | None = None
-    DROPLET_HOST: str | None = None
-    APP_IMAGE: str | None = None
+    DOCKERHUB_USERNAME: str | None = None  # PRODUCTION MODE ONLY
+    DROPLET_USER: str | None = None  # PRODUCTION MODE ONLY
+    DROPLET_HOST: str | None = None  # PRODUCTION MODE ONLY
+    APP_IMAGE: str | None = None  # PRODUCTION MODE ONLY
 
     AWS_ACCESS_KEY_ID: str | None = None
     AWS_SECRET_ACCESS_KEY: str | None = None
@@ -29,12 +29,17 @@ class Settings(BaseSettings):
     MAX_SIZE_FILE_UPLOAD: int | None = None
 
     FRONTEND_ORIGIN: str | None = None
-    BETTERSTACK_OPENTELEMETRY_API_KEY: str | None = None
-    BETTERSTACK_API_KEY: str | None = None
-    BETTERSTACK_HOST: str | None = None
+    BETTERSTACK_OPENTELEMETRY_API_KEY: str | None = None  # PRODUCTION MODE ONLY
+    BETTERSTACK_API_KEY: str | None = None  # PRODUCTION MODE ONLY
+    BETTERSTACK_HOST: str | None = None  # PRODUCTION MODE ONLY
+    BETTERSTACK_OTLP_TRACES_ENDPOINT: str | None = None  # PRODUCTION MODE ONLY
+    BETTERSTACK_OTLP_METRICS_ENDPOINT: str | None = None  # PRODUCTION MODE ONLY
 
     OTEL_SERVICE_NAME: str | None = None
     OTEL_SERVICE_VERSION: str | None = None
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    OTEL_SAMPLE_RATIO: str | None = None
+    OTEL_ENABLE_METRICS: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=None,

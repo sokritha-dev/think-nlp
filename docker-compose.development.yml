@@ -1,17 +1,11 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
     restart: unless-stopped
-    env_file:
-      - .env.development
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - nlp-net
+    env_file: [.env.development]
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [nlp-net]
 
   pgadmin:
     image: dpage/pgadmin4
@@ -25,29 +19,65 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     networks:
       - nlp-net
-
+  
   app:
     build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: nlp-app-dev
     restart: unless-stopped
-    env_file:
-      - .env.development
+    env_file: [.env.development]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_ENABLE_METRICS: "true"
+      OTEL_SAMPLE_RATIO: "1.0"
     volumes:
-      - .:/app  # Mount your local code for live editing
+      - .:/app
+    ports: ["8000:8000"]
+    depends_on: [postgres, otel-collector]
+    networks: [nlp-net]
+    command: ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000","--reload","--log-level","debug"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     ports:
-      - "8000:8000"
-    depends_on:
-      - postgres
-    networks:
-      - nlp-net
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--log-level", "debug"]
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 10
+      - "4318:4318"   # OTLP HTTP in (host exposure optional)
+      # - "8889:8889"   # Prometheus scrape endpoint
+    depends_on: [jaeger]
+    networks: [nlp-net]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger UI
+    networks: [nlp-net]
+
+  # prometheus:
+  #   image: prom/prometheus:v2.54.1
+  #   command:
+  #     - --config.file=/etc/prometheus/prometheus.yml
+  #     - --enable-feature=exemplar-storage
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   ports: ["9090:9090"]
+  #   depends_on: [otel-collector]
+  #   networks: [nlp-net]
+
+  # grafana:
+  #   image: grafana/grafana:10.4.7
+  #   ports: ["3000:3000"]
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   volumes:
+  #     - ./grafana/datasources:/etc/grafana/provisioning/datasources
+  #     - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+  #   depends_on: [prometheus, jaeger]
+  #   networks: [nlp-net]
 
 volumes:
   pgdata:

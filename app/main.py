@@ -21,7 +21,7 @@ from app.utils.exception_handlers import (
     rate_limit_exceeded_handler,
 )
 from app.core.config import settings
-from app.utils.telemetry import setup_otel
+from app.utils.telemetry import setup_observability
 
 
 is_ready = False
@@ -66,7 +66,7 @@ app = FastAPI(
 
 
 # pass the sync engine so SQLAlchemy instrumentation hooks queries
-setup_otel(app, engine=getattr(database._engine, "sync_engine", None))
+setup_observability(app, sqlalchemy_engine=database.sync_engine)
 
 # ===============
 # Middlewares

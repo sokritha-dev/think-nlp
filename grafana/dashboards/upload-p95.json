@@ -1,0 +1,38 @@
+{
+  "title": "Upload p95 (with exemplars)",
+  "tags": ["observability","upload"],
+  "timezone": "",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Upload step p95 latency (ms)",
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95,sum by (le, step) (rate(app_step_duration_milliseconds_bucket{step=~"upload\\..+"}[5m])))",
+          "legendFormat": "{{step}} p95",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {"drawStyle": "line","lineWidth": 2,"showPoints": "never","spanNulls": true},
+          "thresholds": {"mode": "absolute","steps": [{"color": "green"},{"color": "red","value": 2000}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list","placement": "bottom"},
+        "tooltip": {"mode": "multi","sort": "desc"},
+        "showExemplars": true
+      },
+      "gridPos": {"h": 12,"w": 24,"x": 0,"y": 0}
+    }
+  ]
+}
