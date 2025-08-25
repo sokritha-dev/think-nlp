@@ -79,11 +79,20 @@ def _build_resource() -> Resource:
 
 
 def _build_exporters(enable_metrics: bool):
-    # Prod → Better Stack using BETTERSTACK_HOST
+    def is_betterstack(host: str) -> bool:
+        return bool(host) and "betterstack" in host.lower()
+
+    # Common setup
+    headers = (
+        {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
+        if _cfg.betterstack_api_key
+        else None
+    )
+
     if _cfg.env.lower() == "production" and _cfg.betterstack_host:
-        traces_ep = _join(_cfg.betterstack_host, "/v1/traces")
-        metrics_ep = _join(_cfg.betterstack_host, "/metrics")
-        headers = {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
+        base = _cfg.betterstack_host.rstrip("/")
+        traces_ep = _join(base, "/v1/traces")
+        metrics_ep = _join(base, "/v1/metrics")
         span_exp = OTLPSpanExporter(endpoint=traces_ep, headers=headers)
         metric_exp = (
             OTLPMetricExporter(endpoint=metrics_ep, headers=headers)
@@ -93,18 +102,27 @@ def _build_exporters(enable_metrics: bool):
         logger.info("Prod OTEL traces_ep=%s metrics_ep=%s", traces_ep, metrics_ep)
         return span_exp, metric_exp
 
-    # Dev/staging → local/remote collector via OTEL_EXPORTER_OTLP_ENDPOINT
+    # Dev/staging → prefer betterstack_host if provided, else local collector
     base = (_cfg.betterstack_host or "http://localhost:4318").rstrip("/")
     traces_ep = _join(base, "/v1/traces")
-    metrics_ep = _join(base, "/metrics")
-    headers = {"Authorization": f"Bearer {_cfg.betterstack_api_key}"}
-    span_exp = OTLPSpanExporter(endpoint=traces_ep)
+    metrics_ep = _join(base, "/v1/metrics")
+
+    # Only send headers if we're actually talking to Better Stack
+    use_headers = headers if is_betterstack(base) else None
+
+    span_exp = OTLPSpanExporter(endpoint=traces_ep, headers=use_headers)
     metric_exp = (
-        OTLPMetricExporter(endpoint=metrics_ep, headers=headers)
+        OTLPMetricExporter(endpoint=metrics_ep, headers=use_headers)
         if enable_metrics
         else None
     )
-    logger.info("Dev OTEL traces_ep=%s metrics_ep=%s", traces_ep, metrics_ep)
+
+    logger.info(
+        "Dev OTEL traces_ep=%s metrics_ep=%s use_headers=%s",
+        traces_ep,
+        metrics_ep,
+        bool(use_headers),
+    )
     return span_exp, metric_exp
 
 
